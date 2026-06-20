@@ -58,10 +58,3 @@ dependencies {
 tasks.withType<Test> {
     useJUnitPlatform()
 }
-
-// Exclude Lombok from the final fat JAR (same as Maven's <excludes> config)
-tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
-    classpath(configurations.runtimeClasspath.get().filter {
-        it.name != "lombok-${project.findProperty("lombokVersion")}.jar"
-    })
-}
