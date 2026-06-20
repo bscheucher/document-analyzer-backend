@@ -18,6 +18,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -158,36 +159,74 @@ public class DocumentAnalysisService {
     }
 
     private void parseAndApplyLlmResponse(String raw, AnalysisResult result) {
-        String jsonSlice = extractJsonObject(raw);
-        if (jsonSlice == null) {
-            log.warn("No JSON object found in LLM response, storing raw text.");
-            result.setSummary(raw);
-            return;
-        }
-        try {
-            JsonNode json = objectMapper.readTree(jsonSlice);
+        for (String candidate : extractJsonCandidates(raw)) {
+            try {
+                JsonNode json = objectMapper.readTree(candidate);
+                if (!hasAnyExpectedField(json)) continue;
 
-            result.setSummary(json.path("summary").asText());
-            result.setDocumentType(json.path("documentType").asText());
+                result.setSummary(json.path("summary").asText());
+                result.setDocumentType(json.path("documentType").asText());
 
-            JsonNode topics = json.path("keyTopics");
-            if (topics.isArray()) {
-                List<String> topicList = objectMapper.convertValue(
-                        topics, objectMapper.getTypeFactory().constructCollectionType(List.class, String.class));
-                result.setKeyTopics(topicList);
+                JsonNode topics = json.path("keyTopics");
+                if (topics.isArray()) {
+                    List<String> topicList = objectMapper.convertValue(
+                            topics, objectMapper.getTypeFactory().constructCollectionType(List.class, String.class));
+                    result.setKeyTopics(topicList);
+                }
+                return;
+            } catch (Exception ignored) {
+                // not parseable as JSON — try the next candidate
             }
-        } catch (Exception e) {
-            log.warn("Could not parse LLM JSON response, storing raw text. Error: {}", e.getMessage());
-            result.setSummary(raw);
         }
+        log.warn("No usable JSON object found in LLM response, storing raw text.");
+        result.setSummary(raw);
     }
 
-    private static String extractJsonObject(String raw) {
-        if (raw == null) return null;
-        int start = raw.indexOf('{');
-        int end = raw.lastIndexOf('}');
-        if (start < 0 || end <= start) return null;
-        return raw.substring(start, end + 1);
+    private static boolean hasAnyExpectedField(JsonNode json) {
+        return json.has("summary") || json.has("documentType") || json.has("keyTopics");
+    }
+
+    /**
+     * Returns every depth-balanced {...} substring in the input, in order.
+     * String literals are skipped so braces inside quoted values don't
+     * mis-balance the scan.
+     */
+    private static List<String> extractJsonCandidates(String raw) {
+        if (raw == null || raw.isEmpty()) return List.of();
+        List<String> candidates = new ArrayList<>();
+        int depth = 0;
+        int start = -1;
+        boolean inString = false;
+        boolean escaped = false;
+
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
+
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+
+            if (c == '"') {
+                inString = true;
+            } else if (c == '{') {
+                if (depth == 0) start = i;
+                depth++;
+            } else if (c == '}' && depth > 0) {
+                depth--;
+                if (depth == 0 && start >= 0) {
+                    candidates.add(raw.substring(start, i + 1));
+                    start = -1;
+                }
+            }
+        }
+        return candidates;
     }
 
     private void sendEvent(UUID documentId, AnalysisProgressEvent event) {

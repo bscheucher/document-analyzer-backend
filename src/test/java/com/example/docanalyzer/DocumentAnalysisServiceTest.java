@@ -186,6 +186,50 @@ class DocumentAnalysisServiceTest {
     }
 
     @Test
+    void analyzeAsync_picksRealJson_whenExampleBlockPrecedesIt() throws IOException {
+        UUID id = UUID.randomUUID();
+        Document doc = imageDoc(id, "image/png");
+
+        when(persistence.loadWithResult(id)).thenReturn(doc);
+        when(storageService.readBytes(any())).thenReturn(new byte[]{0});
+        // First {...} is an example structure with no expected fields; the
+        // real analysis follows. The old indexOf/lastIndexOf slicer would
+        // grab everything from the first { to the last }, breaking the parse.
+        when(llmService.analyzeImage(any(), any())).thenReturn(
+                "Example: {\"foo\": \"bar\"}.\nResult:\n" +
+                        "{\"documentType\":\"Invoice\",\"summary\":\"Real\",\"keyTopics\":[\"x\"]}");
+
+        service.analyzeAsync(id);
+
+        ArgumentCaptor<AnalysisResult> captor = ArgumentCaptor.forClass(AnalysisResult.class);
+        verify(persistence).completeAnalysis(eq(id), captor.capture());
+        assertThat(captor.getValue().getDocumentType()).isEqualTo("Invoice");
+        assertThat(captor.getValue().getSummary()).isEqualTo("Real");
+        assertThat(captor.getValue().getKeyTopics()).containsExactly("x");
+    }
+
+    @Test
+    void analyzeAsync_handlesBracesInsideStringValues() throws IOException {
+        UUID id = UUID.randomUUID();
+        Document doc = imageDoc(id, "image/png");
+
+        when(persistence.loadWithResult(id)).thenReturn(doc);
+        when(storageService.readBytes(any())).thenReturn(new byte[]{0});
+        when(llmService.analyzeImage(any(), any())).thenReturn(
+                "{\"documentType\":\"Letter\"," +
+                        "\"summary\":\"Body mentions a } char and \\\"quotes\\\".\"," +
+                        "\"keyTopics\":[\"a\"]}");
+
+        service.analyzeAsync(id);
+
+        ArgumentCaptor<AnalysisResult> captor = ArgumentCaptor.forClass(AnalysisResult.class);
+        verify(persistence).completeAnalysis(eq(id), captor.capture());
+        assertThat(captor.getValue().getSummary())
+                .isEqualTo("Body mentions a } char and \"quotes\".");
+        assertThat(captor.getValue().getDocumentType()).isEqualTo("Letter");
+    }
+
+    @Test
     void analyzeAsync_nonJsonResponse_storesRawAsSummary() throws IOException {
         UUID id = UUID.randomUUID();
         Document doc = imageDoc(id, "image/png");
