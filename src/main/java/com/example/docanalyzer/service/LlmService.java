@@ -47,6 +47,7 @@ public class LlmService {
             @Value("${app.ai.ollama.base-url}") String ollamaBaseUrl,
             @Value("${app.ai.ollama.model}") String ollamaModel,
             @Value("${app.ai.ollama.text-model}") String ollamaTextModel,
+            @Value("${app.ai.anthropic.base-url}") String anthropicBaseUrl,
             @Value("${app.ai.anthropic.api-key}") String anthropicApiKey,
             @Value("${app.ai.anthropic.model}") String anthropicModel
     ) {
@@ -63,7 +64,7 @@ public class LlmService {
                 .build();
 
         this.anthropicClient = WebClient.builder()
-                .baseUrl("https://api.anthropic.com")
+                .baseUrl(anthropicBaseUrl)
                 .defaultHeader("x-api-key", anthropicApiKey)
                 .defaultHeader("anthropic-version", "2023-06-01")
                 .clientConnector(connector)

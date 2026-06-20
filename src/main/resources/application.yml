@@ -35,5 +35,6 @@ app:
       model: ${OLLAMA_MODEL:llava}       # vision model for images
       text-model: ${OLLAMA_TEXT_MODEL:llama3}
     anthropic:
+      base-url: ${ANTHROPIC_URL:https://api.anthropic.com}
       api-key: ${ANTHROPIC_API_KEY:}
       model: claude-sonnet-4-6
