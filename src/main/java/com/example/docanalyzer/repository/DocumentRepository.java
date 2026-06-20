@@ -12,10 +12,18 @@ import java.util.UUID;
 @Repository
 public interface DocumentRepository extends JpaRepository<Document, UUID> {
 
-    // Eager-fetch analysis result to avoid N+1 on list view
-    @Query("SELECT d FROM Document d LEFT JOIN FETCH d.analysisResult ORDER BY d.createdAt DESC")
-    List<Document> findAllWithResults();
+    // Eager-fetch analysis result to avoid N+1 on list view, scoped to owner.
+    @Query("SELECT d FROM Document d LEFT JOIN FETCH d.analysisResult " +
+            "WHERE d.owner.id = :ownerId " +
+            "ORDER BY d.createdAt DESC")
+    List<Document> findAllByOwnerWithResults(UUID ownerId);
 
-    @Query("SELECT d FROM Document d LEFT JOIN FETCH d.analysisResult WHERE d.id = :id")
-    Optional<Document> findByIdWithResult(UUID id);
+    @Query("SELECT d FROM Document d LEFT JOIN FETCH d.analysisResult " +
+            "WHERE d.id = :id AND d.owner.id = :ownerId")
+    Optional<Document> findByIdAndOwnerWithResult(UUID id, UUID ownerId);
+
+    // Owner-scoped lookup without the analysis-result fetch — used for
+    // delete and other writes that don't need the result loaded.
+    @Query("SELECT d FROM Document d WHERE d.id = :id AND d.owner.id = :ownerId")
+    Optional<Document> findByIdAndOwner(UUID id, UUID ownerId);
 }

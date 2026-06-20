@@ -17,7 +17,9 @@ public class DocumentPersistenceService {
 
     @Transactional(readOnly = true)
     public Document loadWithResult(UUID id) {
-        return documentRepository.findByIdWithResult(id)
+        // Unscoped lookup — only called from the async analysis pipeline,
+        // which was already authorised by the controller that scheduled it.
+        return documentRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Document not found: " + id));
     }
 
@@ -48,8 +50,8 @@ public class DocumentPersistenceService {
     }
 
     @Transactional
-    public String deleteAndReturnPath(UUID id) {
-        Document doc = documentRepository.findById(id).orElse(null);
+    public String deleteAndReturnPath(UUID id, UUID ownerId) {
+        Document doc = documentRepository.findByIdAndOwner(id, ownerId).orElse(null);
         if (doc == null) return null;
         String storagePath = doc.getStoragePath();
         documentRepository.delete(doc);

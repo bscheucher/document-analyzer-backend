@@ -5,7 +5,9 @@ import com.example.docanalyzer.dto.DocumentDetailResponse;
 import com.example.docanalyzer.dto.DocumentUploadResponse;
 import com.example.docanalyzer.entity.AnalysisResult;
 import com.example.docanalyzer.entity.Document;
+import com.example.docanalyzer.entity.User;
 import com.example.docanalyzer.repository.DocumentRepository;
+import com.example.docanalyzer.service.CurrentUserProvider;
 import com.example.docanalyzer.service.DocumentAnalysisService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
@@ -26,6 +28,7 @@ public class DocumentController {
 
     private final DocumentAnalysisService analysisService;
     private final DocumentRepository documentRepository;
+    private final CurrentUserProvider currentUserProvider;
 
     /**
      * POST /api/documents/upload
@@ -36,7 +39,8 @@ public class DocumentController {
             @RequestParam("file") MultipartFile file) throws IOException {
 
         validateFile(file);
-        Document doc = analysisService.upload(file);
+        User owner = currentUserProvider.getCurrentUser();
+        Document doc = analysisService.upload(file, owner);
 
         // Fire-and-forget: start analysis in background thread
         analysisService.analyzeAsync(doc.getId());
@@ -47,10 +51,14 @@ public class DocumentController {
     /**
      * GET /api/documents/{id}/stream
      * SSE endpoint — client subscribes and receives progress events.
+     * 404 if the document isn't owned by the current user.
      */
     @GetMapping(value = "/{id}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter stream(@PathVariable UUID id) {
-        return analysisService.subscribe(id);
+    public ResponseEntity<SseEmitter> stream(@PathVariable UUID id) {
+        UUID ownerId = currentUserProvider.getCurrentUser().getId();
+        return documentRepository.findByIdAndOwner(id, ownerId).isPresent()
+                ? ResponseEntity.ok(analysisService.subscribe(id))
+                : ResponseEntity.notFound().build();
     }
 
     /**
@@ -59,7 +67,8 @@ public class DocumentController {
      */
     @GetMapping("/{id}")
     public ResponseEntity<DocumentDetailResponse> getDocument(@PathVariable UUID id) {
-        return documentRepository.findByIdWithResult(id)
+        UUID ownerId = currentUserProvider.getCurrentUser().getId();
+        return documentRepository.findByIdAndOwnerWithResult(id, ownerId)
                 .map(this::toDetailResponse)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
@@ -67,11 +76,12 @@ public class DocumentController {
 
     /**
      * GET /api/documents
-     * List all documents (latest first).
+     * List the current user's documents (latest first).
      */
     @GetMapping
     public List<DocumentDetailResponse> list() {
-        return documentRepository.findAllWithResults().stream()
+        UUID ownerId = currentUserProvider.getCurrentUser().getId();
+        return documentRepository.findAllByOwnerWithResults(ownerId).stream()
                 .map(this::toDetailResponse)
                 .toList();
     }
@@ -81,7 +91,8 @@ public class DocumentController {
      */
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(@PathVariable UUID id) {
-        return analysisService.delete(id)
+        User owner = currentUserProvider.getCurrentUser();
+        return analysisService.delete(id, owner)
                 ? ResponseEntity.noContent().build()
                 : ResponseEntity.notFound().build();
     }

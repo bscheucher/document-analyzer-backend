@@ -2,6 +2,7 @@ package com.example.docanalyzer.config;
 
 import com.example.docanalyzer.controller.DocumentController;
 import com.example.docanalyzer.repository.DocumentRepository;
+import com.example.docanalyzer.service.CurrentUserProvider;
 import com.example.docanalyzer.service.DocumentAnalysisService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,6 +24,7 @@ class CorsConfigTest {
     @Autowired MockMvc mockMvc;
     @MockBean DocumentAnalysisService analysisService;
     @MockBean DocumentRepository documentRepository;
+    @MockBean CurrentUserProvider currentUserProvider;
 
     @Test
     void preflight_fromAllowedOrigin_returnsAllowOriginHeader() throws Exception {

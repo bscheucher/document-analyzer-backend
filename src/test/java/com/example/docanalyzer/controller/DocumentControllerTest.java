@@ -1,7 +1,9 @@
 package com.example.docanalyzer.controller;
 
 import com.example.docanalyzer.entity.Document;
+import com.example.docanalyzer.entity.User;
 import com.example.docanalyzer.repository.DocumentRepository;
+import com.example.docanalyzer.service.CurrentUserProvider;
 import com.example.docanalyzer.service.DocumentAnalysisService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -17,6 +19,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -25,12 +28,20 @@ class DocumentControllerTest {
 
     @Mock DocumentAnalysisService analysisService;
     @Mock DocumentRepository documentRepository;
+    @Mock CurrentUserProvider currentUserProvider;
 
     DocumentController controller;
+    User owner;
 
     @BeforeEach
     void setUp() {
-        controller = new DocumentController(analysisService, documentRepository);
+        controller = new DocumentController(analysisService, documentRepository, currentUserProvider);
+        owner = new User();
+        owner.setId(UUID.randomUUID());
+        owner.setEmail("test@example.com");
+        // Lenient because some upload-validation tests reject the request
+        // before the controller ever resolves the user.
+        org.mockito.Mockito.lenient().when(currentUserProvider.getCurrentUser()).thenReturn(owner);
     }
 
     // ── Positive paths: real magic-byte signatures pass ─────────────────────
@@ -41,7 +52,7 @@ class DocumentControllerTest {
                 "file", "doc.pdf", "application/pdf",
                 "%PDF-1.4\nsome content".getBytes());
         Document doc = uploadedDoc();
-        when(analysisService.upload(file)).thenReturn(doc);
+        when(analysisService.upload(file, owner)).thenReturn(doc);
 
         ResponseEntity<?> response = controller.upload(file);
 
@@ -56,7 +67,7 @@ class DocumentControllerTest {
                 0, 0, 0, 0, 0, 0, 0, 0
         };
         MockMultipartFile file = new MockMultipartFile("file", "scan.jpg", "image/jpeg", jpeg);
-        when(analysisService.upload(file)).thenReturn(uploadedDoc());
+        when(analysisService.upload(file, owner)).thenReturn(uploadedDoc());
 
         ResponseEntity<?> response = controller.upload(file);
 
@@ -70,7 +81,7 @@ class DocumentControllerTest {
                 0, 0, 0, 0
         };
         MockMultipartFile file = new MockMultipartFile("file", "scan.png", "image/png", png);
-        when(analysisService.upload(file)).thenReturn(uploadedDoc());
+        when(analysisService.upload(file, owner)).thenReturn(uploadedDoc());
 
         ResponseEntity<?> response = controller.upload(file);
 
@@ -81,7 +92,7 @@ class DocumentControllerTest {
     void upload_validGif_succeeds() throws IOException {
         byte[] gif = "GIF89a......".getBytes();
         MockMultipartFile file = new MockMultipartFile("file", "anim.gif", "image/gif", gif);
-        when(analysisService.upload(file)).thenReturn(uploadedDoc());
+        when(analysisService.upload(file, owner)).thenReturn(uploadedDoc());
 
         ResponseEntity<?> response = controller.upload(file);
 
@@ -96,7 +107,7 @@ class DocumentControllerTest {
                 'W', 'E', 'B', 'P'
         };
         MockMultipartFile file = new MockMultipartFile("file", "pic.webp", "image/webp", webp);
-        when(analysisService.upload(file)).thenReturn(uploadedDoc());
+        when(analysisService.upload(file, owner)).thenReturn(uploadedDoc());
 
         ResponseEntity<?> response = controller.upload(file);
 
@@ -179,6 +190,55 @@ class DocumentControllerTest {
         assertThatThrownBy(() -> controller.upload(file))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("50 MB");
+    }
+
+    // ── Ownership scoping ───────────────────────────────────────────────────
+
+    @Test
+    void getDocument_notOwnedByCurrentUser_returns404() {
+        // Repository returns empty when the doc either doesn't exist OR
+        // belongs to a different owner; the controller can't distinguish
+        // (intentionally — leaking existence enables enumeration attacks).
+        UUID id = UUID.randomUUID();
+        when(documentRepository.findByIdAndOwnerWithResult(id, owner.getId()))
+                .thenReturn(java.util.Optional.empty());
+
+        ResponseEntity<?> response = controller.getDocument(id);
+
+        assertThat(response.getStatusCode().value()).isEqualTo(404);
+    }
+
+    @Test
+    void list_queriesByCurrentUserId() {
+        when(documentRepository.findAllByOwnerWithResults(owner.getId()))
+                .thenReturn(java.util.List.of());
+
+        controller.list();
+
+        verify(documentRepository).findAllByOwnerWithResults(owner.getId());
+    }
+
+    @Test
+    void stream_notOwnedByCurrentUser_returns404() {
+        UUID id = UUID.randomUUID();
+        when(documentRepository.findByIdAndOwner(id, owner.getId()))
+                .thenReturn(java.util.Optional.empty());
+
+        ResponseEntity<?> response = controller.stream(id);
+
+        assertThat(response.getStatusCode().value()).isEqualTo(404);
+        verify(analysisService, org.mockito.Mockito.never()).subscribe(any());
+    }
+
+    @Test
+    void delete_passesCurrentUserToService() {
+        UUID id = UUID.randomUUID();
+        when(analysisService.delete(id, owner)).thenReturn(true);
+
+        ResponseEntity<?> response = controller.delete(id);
+
+        assertThat(response.getStatusCode().value()).isEqualTo(204);
+        verify(analysisService).delete(id, owner);
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────

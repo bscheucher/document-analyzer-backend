@@ -2,6 +2,7 @@ package com.example.docanalyzer.service;
 
 import com.example.docanalyzer.entity.AnalysisResult;
 import com.example.docanalyzer.entity.Document;
+import com.example.docanalyzer.entity.User;
 import com.example.docanalyzer.repository.DocumentRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,9 +36,13 @@ class DocumentAnalysisServiceTest {
     @Mock LlmService llmService;
 
     DocumentAnalysisService service;
+    User owner;
 
     @BeforeEach
     void setUp() {
+        owner = new User();
+        owner.setId(UUID.randomUUID());
+        owner.setEmail("test@example.com");
         service = new DocumentAnalysisService(
                 documentRepository, persistence, storageService, llmService, new ObjectMapper()
         );
@@ -61,11 +66,12 @@ class DocumentAnalysisServiceTest {
             return doc;
         });
 
-        Document doc = service.upload(file);
+        Document doc = service.upload(file, owner);
 
         assertThat(doc.getFileType()).isEqualTo(Document.FileType.PDF);
         assertThat(doc.getFilename()).isEqualTo("test.pdf");
         assertThat(doc.getStatus()).isEqualTo(Document.DocumentStatus.PENDING);
+        assertThat(doc.getOwner()).isSameAs(owner);
         verify(documentRepository).save(any(Document.class));
     }
 
@@ -78,7 +84,7 @@ class DocumentAnalysisServiceTest {
         when(storageService.store(file)).thenReturn("stored-scan.jpg");
         when(documentRepository.save(any(Document.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        Document doc = service.upload(file);
+        Document doc = service.upload(file, owner);
 
         assertThat(doc.getFileType()).isEqualTo(Document.FileType.IMAGE);
     }
@@ -89,7 +95,7 @@ class DocumentAnalysisServiceTest {
         Document doc = new Document();
         doc.setStatus(Document.DocumentStatus.PENDING);
 
-        when(documentRepository.findByIdWithResult(id)).thenReturn(Optional.of(doc));
+        when(documentRepository.findById(id)).thenReturn(Optional.of(doc));
 
         var emitter = service.subscribe(id);
 
@@ -101,7 +107,7 @@ class DocumentAnalysisServiceTest {
         UUID id = UUID.randomUUID();
         Document doc = new Document();
         doc.setStatus(Document.DocumentStatus.PENDING);
-        when(documentRepository.findByIdWithResult(id)).thenReturn(Optional.of(doc));
+        when(documentRepository.findById(id)).thenReturn(Optional.of(doc));
 
         var first = service.subscribe(id);
         var second = service.subscribe(id);

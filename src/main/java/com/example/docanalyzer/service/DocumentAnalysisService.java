@@ -3,6 +3,7 @@ package com.example.docanalyzer.service;
 import com.example.docanalyzer.dto.AnalysisProgressEvent;
 import com.example.docanalyzer.entity.AnalysisResult;
 import com.example.docanalyzer.entity.Document;
+import com.example.docanalyzer.entity.User;
 import com.example.docanalyzer.repository.DocumentRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -49,11 +50,12 @@ public class DocumentAnalysisService {
 
     // ── Upload ───────────────────────────────────────────────────────────────
 
-    public Document upload(MultipartFile file) throws IOException {
+    public Document upload(MultipartFile file, User owner) throws IOException {
         String storagePath = storageService.store(file);
         Document.FileType fileType = detectFileType(file.getContentType());
 
         Document doc = new Document();
+        doc.setOwner(owner);
         doc.setFilename(file.getOriginalFilename());
         doc.setFileType(fileType);
         doc.setFileSize(file.getSize());
@@ -66,8 +68,8 @@ public class DocumentAnalysisService {
 
     // ── Delete ───────────────────────────────────────────────────────────────
 
-    public boolean delete(UUID documentId) {
-        String storagePath = persistence.deleteAndReturnPath(documentId);
+    public boolean delete(UUID documentId, User owner) {
+        String storagePath = persistence.deleteAndReturnPath(documentId, owner.getId());
         if (storagePath == null) return false;
 
         try {
@@ -100,8 +102,11 @@ public class DocumentAnalysisService {
         emitter.onTimeout(() -> emitters.remove(documentId, emitter));
         emitter.onError(e -> emitters.remove(documentId, emitter));
 
-        // If document is already done, send final state immediately
-        documentRepository.findByIdWithResult(documentId).ifPresent(doc -> {
+        // If document is already done, send final state immediately. Owner
+        // verification has already been performed by the caller (the
+        // controller looked up the doc via findByIdAndOwnerWithResult before
+        // calling subscribe), so an unscoped findById is correct here.
+        documentRepository.findById(documentId).ifPresent(doc -> {
             if (doc.getStatus() == Document.DocumentStatus.DONE
                     || doc.getStatus() == Document.DocumentStatus.FAILED) {
                 sendEvent(documentId, new AnalysisProgressEvent(
