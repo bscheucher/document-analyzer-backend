@@ -21,9 +21,6 @@ import java.util.Map;
 @Service
 public class LlmService {
 
-    private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(10);
-    private static final Duration RESPONSE_TIMEOUT = Duration.ofMinutes(2);
-
     private static final String ANALYSIS_PROMPT = """
             Analyze the following document and respond in JSON with this exact structure:
             {
@@ -44,6 +41,8 @@ public class LlmService {
 
     public LlmService(
             @Value("${app.ai.provider}") String provider,
+            @Value("${app.ai.connect-timeout}") Duration connectTimeout,
+            @Value("${app.ai.response-timeout}") Duration responseTimeout,
             @Value("${app.ai.ollama.base-url}") String ollamaBaseUrl,
             @Value("${app.ai.ollama.model}") String ollamaModel,
             @Value("${app.ai.ollama.text-model}") String ollamaTextModel,
@@ -55,23 +54,25 @@ public class LlmService {
         this.ollamaTextModel = ollamaTextModel;
         this.anthropicModel = anthropicModel;
 
+        ReactorClientHttpConnector connector = timeoutConnector(connectTimeout, responseTimeout);
+
         this.ollamaClient = WebClient.builder()
                 .baseUrl(ollamaBaseUrl)
-                .clientConnector(timeoutConnector())
+                .clientConnector(connector)
                 .build();
 
         this.anthropicClient = WebClient.builder()
                 .baseUrl("https://api.anthropic.com")
                 .defaultHeader("x-api-key", anthropicApiKey)
                 .defaultHeader("anthropic-version", "2023-06-01")
-                .clientConnector(timeoutConnector())
+                .clientConnector(connector)
                 .build();
     }
 
-    private static ReactorClientHttpConnector timeoutConnector() {
+    private static ReactorClientHttpConnector timeoutConnector(Duration connectTimeout, Duration responseTimeout) {
         HttpClient httpClient = HttpClient.create()
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) CONNECT_TIMEOUT.toMillis())
-                .responseTimeout(RESPONSE_TIMEOUT);
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) connectTimeout.toMillis())
+                .responseTimeout(responseTimeout);
         return new ReactorClientHttpConnector(httpClient);
     }
 
