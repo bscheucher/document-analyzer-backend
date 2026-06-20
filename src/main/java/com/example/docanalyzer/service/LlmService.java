@@ -1,10 +1,14 @@
 package com.example.docanalyzer.service;
 
+import io.netty.channel.ChannelOption;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
+import reactor.netty.http.client.HttpClient;
 
+import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
@@ -16,6 +20,9 @@ import java.util.Map;
 @Slf4j
 @Service
 public class LlmService {
+
+    private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(10);
+    private static final Duration RESPONSE_TIMEOUT = Duration.ofMinutes(2);
 
     private static final String ANALYSIS_PROMPT = """
             Analyze the following document and respond in JSON with this exact structure:
@@ -50,13 +57,22 @@ public class LlmService {
 
         this.ollamaClient = WebClient.builder()
                 .baseUrl(ollamaBaseUrl)
+                .clientConnector(timeoutConnector())
                 .build();
 
         this.anthropicClient = WebClient.builder()
                 .baseUrl("https://api.anthropic.com")
                 .defaultHeader("x-api-key", anthropicApiKey)
                 .defaultHeader("anthropic-version", "2023-06-01")
+                .clientConnector(timeoutConnector())
                 .build();
+    }
+
+    private static ReactorClientHttpConnector timeoutConnector() {
+        HttpClient httpClient = HttpClient.create()
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) CONNECT_TIMEOUT.toMillis())
+                .responseTimeout(RESPONSE_TIMEOUT);
+        return new ReactorClientHttpConnector(httpClient);
     }
 
     /**
