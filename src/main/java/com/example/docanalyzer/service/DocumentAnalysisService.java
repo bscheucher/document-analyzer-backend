@@ -71,11 +71,23 @@ public class DocumentAnalysisService {
 
     public SseEmitter subscribe(UUID documentId) {
         SseEmitter emitter = new SseEmitter(5 * 60 * 1000L); // 5 min timeout
-        emitters.put(documentId, emitter);
 
-        emitter.onCompletion(() -> emitters.remove(documentId));
-        emitter.onTimeout(() -> emitters.remove(documentId));
-        emitter.onError(e -> emitters.remove(documentId));
+        SseEmitter previous = emitters.put(documentId, emitter);
+        if (previous != null) {
+            // Reconnect: terminate the stale connection cleanly so the old
+            // request thread is released instead of waiting for its timeout.
+            try {
+                previous.complete();
+            } catch (Exception ignored) {
+                // best-effort: prior emitter may already be in a terminal state
+            }
+        }
+
+        // remove(key, value) so a late callback from an already-replaced
+        // emitter cannot evict the current one from the map.
+        emitter.onCompletion(() -> emitters.remove(documentId, emitter));
+        emitter.onTimeout(() -> emitters.remove(documentId, emitter));
+        emitter.onError(e -> emitters.remove(documentId, emitter));
 
         // If document is already done, send final state immediately
         documentRepository.findByIdWithResult(documentId).ifPresent(doc -> {
@@ -185,9 +197,11 @@ public class DocumentAnalysisService {
             emitter.send(SseEmitter.event()
                     .name("progress")
                     .data(event));
-        } catch (IOException e) {
-            log.debug("SSE emitter disconnected for {}", documentId);
-            emitters.remove(documentId);
+        } catch (IOException | IllegalStateException e) {
+            // IOException: client disconnected. IllegalStateException: emitter
+            // was completed under us (e.g. replaced by a reconnect).
+            log.debug("SSE emitter unavailable for {}: {}", documentId, e.getMessage());
+            emitters.remove(documentId, emitter);
         }
     }
 

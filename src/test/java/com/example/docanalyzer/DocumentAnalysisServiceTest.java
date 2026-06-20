@@ -21,6 +21,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
@@ -87,6 +88,23 @@ class DocumentAnalysisServiceTest {
         var emitter = service.subscribe(id);
 
         assertThat(emitter).isNotNull();
+    }
+
+    @Test
+    void subscribe_reconnect_completesPriorEmitter() {
+        UUID id = UUID.randomUUID();
+        Document doc = new Document();
+        doc.setStatus(Document.DocumentStatus.PENDING);
+        when(documentRepository.findByIdWithResult(id)).thenReturn(Optional.of(doc));
+
+        var first = service.subscribe(id);
+        var second = service.subscribe(id);
+
+        // The first emitter must be in a terminal state — sending on a
+        // completed SseEmitter throws IllegalStateException.
+        assertThat(first).isNotSameAs(second);
+        assertThatThrownBy(() -> first.send("late"))
+                .isInstanceOf(IllegalStateException.class);
     }
 
     // ── analyzeAsync pipeline ────────────────────────────────────────────────
