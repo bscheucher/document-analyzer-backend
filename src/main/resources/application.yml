@@ -23,6 +23,9 @@ server:
   port: 8080
 
 app:
+  cors:
+    # Comma-separated list. Defaults to the Vite dev server.
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173}
   storage:
     # Local disk storage — swap for Azure Blob config later
     upload-dir: ${UPLOAD_DIR:./uploads}

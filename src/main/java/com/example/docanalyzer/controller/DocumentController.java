@@ -22,7 +22,6 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/documents")
 @RequiredArgsConstructor
-@CrossOrigin(origins = "http://localhost:5173") // Vite dev server
 public class DocumentController {
 
     private final DocumentAnalysisService analysisService;
