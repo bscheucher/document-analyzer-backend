@@ -12,6 +12,7 @@ import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Thin wrapper around Ollama (default) or Anthropic API.
@@ -196,11 +197,26 @@ public class LlmService {
         return extractAnthropicText(response);
     }
 
+    /**
+     * Anthropic responses contain a list of typed content blocks
+     * ({@code text}, {@code tool_use}, etc). Return the first {@code text}
+     * block's value, or an empty string if none is present. Package-private
+     * so it can be unit tested without spinning up a WebClient.
+     */
     @SuppressWarnings("unchecked")
-    private String extractAnthropicText(Map<?, ?> response) {
+    static String extractAnthropicText(Map<?, ?> response) {
         if (response == null) return "";
-        var content = (List<Map<String, Object>>) response.get("content");
-        if (content == null || content.isEmpty()) return "";
-        return (String) content.get(0).get("text");
+        Object raw = response.get("content");
+        if (!(raw instanceof List<?> content)) return "";
+        return content.stream()
+                .filter(Map.class::isInstance)
+                .map(block -> (Map<String, Object>) block)
+                .filter(block -> "text".equals(block.get("type")))
+                .map(block -> block.get("text"))
+                .filter(String.class::isInstance)
+                .map(String.class::cast)
+                .filter(Objects::nonNull)
+                .findFirst()
+                .orElse("");
     }
 }
