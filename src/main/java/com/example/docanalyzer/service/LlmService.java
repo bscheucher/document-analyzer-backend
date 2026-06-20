@@ -97,7 +97,7 @@ public class LlmService {
         String base64 = Base64.getEncoder().encodeToString(imageBytes);
         return switch (provider) {
             case "anthropic" -> callAnthropicVision(base64, mimeType);
-            default -> callOllamaVision(base64, mimeType);
+            default -> callOllamaVision(base64);
         };
     }
 
@@ -122,7 +122,7 @@ public class LlmService {
         return response != null ? (String) response.get("response") : "";
     }
 
-    private String callOllamaVision(String base64Image, String mimeType) {
+    private String callOllamaVision(String base64Image) {
         log.debug("Calling Ollama vision model: {}", ollamaModel);
 
         Map<String, Object> body = Map.of(
