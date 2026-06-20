@@ -47,7 +47,16 @@ public class StorageService {
     }
 
     public Path load(String storagePath) {
-        return uploadDir.resolve(storagePath).normalize();
+        if (storagePath == null) {
+            throw new IllegalArgumentException("storagePath must not be null");
+        }
+        Path resolved = uploadDir.resolve(storagePath).normalize();
+        if (!resolved.startsWith(uploadDir)) {
+            // Today storagePath is always a UUID we generated, but guard
+            // anyway so a bad value can never escape the upload directory.
+            throw new IllegalArgumentException("Resolved path escapes the upload directory");
+        }
+        return resolved;
     }
 
     public byte[] readBytes(String storagePath) throws IOException {
@@ -59,8 +68,15 @@ public class StorageService {
         Files.deleteIfExists(path);
     }
 
+    /**
+     * Returns a safe lowercase extension (a-z0-9, ≤10 chars) or "bin" if the
+     * filename has no usable extension. Sanitised so that a malicious
+     * upload like "x.txt/../../etc/passwd" cannot inject path separators
+     * into the stored filename.
+     */
     private String getExtension(String filename) {
         if (filename == null || !filename.contains(".")) return "bin";
-        return filename.substring(filename.lastIndexOf('.') + 1).toLowerCase();
+        String ext = filename.substring(filename.lastIndexOf('.') + 1).toLowerCase();
+        return ext.matches("[a-z0-9]{1,10}") ? ext : "bin";
     }
 }
