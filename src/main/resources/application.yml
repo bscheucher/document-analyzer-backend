@@ -33,6 +33,13 @@ app:
     provider: ${AI_PROVIDER:ollama}   # "ollama" or "anthropic"
     connect-timeout: ${AI_CONNECT_TIMEOUT:10s}
     response-timeout: ${AI_RESPONSE_TIMEOUT:2m}
+    chunking:
+      # Below threshold-chars: one single LLM call (today's behavior).
+      # Above: split into chunk-size-chars windows with overlap-chars overlap,
+      # summarise each part, then merge.
+      threshold-chars: ${CHUNK_THRESHOLD_CHARS:20000}
+      chunk-size-chars: ${CHUNK_SIZE_CHARS:6000}
+      overlap-chars: ${CHUNK_OVERLAP_CHARS:200}
     ollama:
       base-url: ${OLLAMA_URL:http://localhost:11434}
       model: ${OLLAMA_MODEL:llava}       # vision model for images

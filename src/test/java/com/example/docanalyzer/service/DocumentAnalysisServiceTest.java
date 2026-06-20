@@ -1,12 +1,8 @@
-package com.example.docanalyzer;
+package com.example.docanalyzer.service;
 
 import com.example.docanalyzer.entity.AnalysisResult;
 import com.example.docanalyzer.entity.Document;
 import com.example.docanalyzer.repository.DocumentRepository;
-import com.example.docanalyzer.service.DocumentAnalysisService;
-import com.example.docanalyzer.service.DocumentPersistenceService;
-import com.example.docanalyzer.service.LlmService;
-import com.example.docanalyzer.service.StorageService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -17,12 +13,16 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+
+import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -41,6 +41,12 @@ class DocumentAnalysisServiceTest {
         service = new DocumentAnalysisService(
                 documentRepository, persistence, storageService, llmService, new ObjectMapper()
         );
+        // @Value-injected fields aren't set by the no-Spring constructor — pick
+        // small values so the chunking tests can exercise the path with tiny
+        // synthetic inputs.
+        ReflectionTestUtils.setField(service, "chunkingThresholdChars", 100);
+        ReflectionTestUtils.setField(service, "chunkSizeChars", 50);
+        ReflectionTestUtils.setField(service, "chunkOverlapChars", 10);
     }
 
     @Test
@@ -246,6 +252,86 @@ class DocumentAnalysisServiceTest {
         assertThat(result.getSummary()).isEqualTo("Sorry, I cannot analyze this.");
         assertThat(result.getDocumentType()).isNull();
         assertThat(result.getKeyTopics()).isNull();
+    }
+
+    // ── chunkText (pure function) ────────────────────────────────────────────
+
+    @Test
+    void chunkText_shorterThanChunkSize_returnsSingleChunk() {
+        List<String> chunks = DocumentAnalysisService.chunkText("hello", 100, 10);
+        assertThat(chunks).containsExactly("hello");
+    }
+
+    @Test
+    void chunkText_emptyOrNull_returnsEmpty() {
+        assertThat(DocumentAnalysisService.chunkText(null, 100, 10)).isEmpty();
+        assertThat(DocumentAnalysisService.chunkText("", 100, 10)).isEmpty();
+    }
+
+    @Test
+    void chunkText_longerThanChunkSize_splitsWithOverlap() {
+        // 30 chars, chunk=10, overlap=2 → step=8, so chunks start at 0, 8, 16, 24.
+        String text = "abcdefghijklmnopqrstuvwxyz1234";
+        List<String> chunks = DocumentAnalysisService.chunkText(text, 10, 2);
+
+        assertThat(chunks).containsExactly(
+                "abcdefghij",   // 0..10
+                "ijklmnopqr",   // 8..18  — first 2 chars overlap with previous
+                "qrstuvwxyz",   // 16..26
+                "yz1234"        // 24..30 — short tail
+        );
+    }
+
+    @Test
+    void chunkText_invalidConfig_throws() {
+        assertThatThrownBy(() -> DocumentAnalysisService.chunkText("x", 0, 0))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> DocumentAnalysisService.chunkText("x", 10, 10))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> DocumentAnalysisService.chunkText("x", 10, -1))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    // ── analyzeTextMaybeChunked orchestration ────────────────────────────────
+
+    @Test
+    void analyzeTextMaybeChunked_underThreshold_callsAnalyzeTextOnce() {
+        UUID id = UUID.randomUUID();
+        when(llmService.analyzeText("short text")).thenReturn("{\"summary\":\"S\"}");
+
+        String result = service.analyzeTextMaybeChunked(id, "short text");
+
+        assertThat(result).isEqualTo("{\"summary\":\"S\"}");
+        verify(llmService).analyzeText("short text");
+        verify(llmService, never()).analyzeTextChunk(any(), anyInt(), anyInt());
+        verify(llmService, never()).mergePartialSummaries(any());
+    }
+
+    @Test
+    void analyzeTextMaybeChunked_overThreshold_chunksAndMerges() {
+        UUID id = UUID.randomUUID();
+        // threshold=100, chunkSize=50, overlap=10 → step=40, so a 130-char
+        // input splits into chunks starting at 0, 40, 80 (3 chunks).
+        String text = "a".repeat(130);
+
+        when(llmService.analyzeTextChunk(any(), anyInt(), eq(3)))
+                .thenReturn("{\"summary\":\"partial\"}");
+        when(llmService.mergePartialSummaries(any()))
+                .thenReturn("{\"summary\":\"merged\",\"documentType\":\"X\"}");
+
+        String result = service.analyzeTextMaybeChunked(id, text);
+
+        assertThat(result).isEqualTo("{\"summary\":\"merged\",\"documentType\":\"X\"}");
+        verify(llmService, never()).analyzeText(any());
+        verify(llmService).analyzeTextChunk(any(), eq(1), eq(3));
+        verify(llmService).analyzeTextChunk(any(), eq(2), eq(3));
+        verify(llmService).analyzeTextChunk(any(), eq(3), eq(3));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<String>> partialsCaptor = ArgumentCaptor.forClass(List.class);
+        verify(llmService).mergePartialSummaries(partialsCaptor.capture());
+        assertThat(partialsCaptor.getValue()).hasSize(3);
+        assertThat(partialsCaptor.getValue()).allMatch(p -> p.contains("partial"));
     }
 
     private static Document imageDoc(UUID id, String contentType) {

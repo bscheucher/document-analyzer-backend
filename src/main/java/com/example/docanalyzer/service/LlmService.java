@@ -33,6 +33,29 @@ public class LlmService {
             Document content:
             """;
 
+    private static final String CHUNK_PROMPT_TEMPLATE = """
+            You are analyzing part %d of %d of a longer document. Provide a brief partial analysis in JSON with this exact structure:
+            {
+              "documentType": "<your best guess based on this part>",
+              "summary": "<1-2 sentence summary of THIS PART only>",
+              "keyTopics": ["<topic1>", "<topic2>"]
+            }
+            Respond ONLY with the JSON object. No markdown, no explanation.
+            Part content:
+            """;
+
+    private static final String MERGE_PROMPT = """
+            Below are partial JSON analyses of consecutive parts of a single document. Produce a final consolidated analysis in JSON with this exact structure:
+            {
+              "documentType": "<best document type given all parts>",
+              "summary": "<2-3 sentence summary covering the whole document>",
+              "keyTopics": ["<topic1>", "<topic2>", "<topic3>"]
+            }
+            Pick the most consistent documentType, union the keyTopics (dedup, keep the top ~5), and write a fresh summary covering the whole document — do not just concatenate the partial summaries.
+            Respond ONLY with the JSON object. No markdown, no explanation.
+            Partial analyses:
+            """;
+
     private final String provider;
     private final WebClient ollamaClient;
     private final WebClient anthropicClient;
@@ -79,14 +102,34 @@ public class LlmService {
     }
 
     /**
-     * Analyze extracted text from a PDF.
+     * Analyze extracted text from a PDF in a single call. Use this when the
+     * full text fits comfortably in the model's context.
      */
     public String analyzeText(String extractedText) {
-        String prompt = ANALYSIS_PROMPT + "\n\n" + extractedText;
-        return switch (provider) {
-            case "anthropic" -> callAnthropic(prompt);
-            default -> callOllamaText(prompt);
-        };
+        return callTextProvider(ANALYSIS_PROMPT + "\n\n" + extractedText);
+    }
+
+    /**
+     * Analyze one chunk of a longer document. Tells the model it's looking
+     * at part {@code chunkIndex} of {@code chunkTotal} so the partial summary
+     * is appropriately scoped.
+     */
+    public String analyzeTextChunk(String chunkText, int chunkIndex, int chunkTotal) {
+        String prompt = String.format(CHUNK_PROMPT_TEMPLATE, chunkIndex, chunkTotal) + "\n\n" + chunkText;
+        return callTextProvider(prompt);
+    }
+
+    /**
+     * Consolidate the partial JSON analyses of a chunked document into a
+     * single final JSON analysis.
+     */
+    public String mergePartialSummaries(List<String> partials) {
+        StringBuilder body = new StringBuilder();
+        for (int i = 0; i < partials.size(); i++) {
+            body.append("--- Part ").append(i + 1).append(" ---\n")
+                    .append(partials.get(i)).append("\n");
+        }
+        return callTextProvider(MERGE_PROMPT + "\n\n" + body);
     }
 
     /**
@@ -98,6 +141,13 @@ public class LlmService {
         return switch (provider) {
             case "anthropic" -> callAnthropicVision(base64, mimeType);
             default -> callOllamaVision(base64);
+        };
+    }
+
+    private String callTextProvider(String prompt) {
+        return switch (provider) {
+            case "anthropic" -> callAnthropic(prompt);
+            default -> callOllamaText(prompt);
         };
     }
 

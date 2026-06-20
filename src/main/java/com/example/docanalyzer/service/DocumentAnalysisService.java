@@ -11,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -33,6 +34,15 @@ public class DocumentAnalysisService {
     private final StorageService storageService;
     private final LlmService llmService;
     private final ObjectMapper objectMapper;
+
+    @Value("${app.ai.chunking.threshold-chars:20000}")
+    private int chunkingThresholdChars;
+
+    @Value("${app.ai.chunking.chunk-size-chars:6000}")
+    private int chunkSizeChars;
+
+    @Value("${app.ai.chunking.overlap-chars:200}")
+    private int chunkOverlapChars;
 
     // Holds active SSE emitters by document ID
     private final ConcurrentHashMap<UUID, SseEmitter> emitters = new ConcurrentHashMap<>();
@@ -128,7 +138,7 @@ public class DocumentAnalysisService {
                     ? llmService.analyzeImage(
                             storageService.readBytes(doc.getStoragePath()),
                             doc.getContentType() != null ? doc.getContentType() : "image/jpeg")
-                    : llmService.analyzeText(extractedText);
+                    : analyzeTextMaybeChunked(documentId, extractedText);
 
             result.setRawLlmResponse(llmResponse);
             parseAndApplyLlmResponse(llmResponse, result);
@@ -156,6 +166,58 @@ public class DocumentAnalysisService {
             }
         }
         return "";
+    }
+
+    /**
+     * Single LLM call when the extracted text fits comfortably, otherwise
+     * chunked map-reduce: summarise each chunk, then ask the model to
+     * consolidate the partials into a final analysis.
+     */
+    String analyzeTextMaybeChunked(UUID documentId, String text) {
+        if (text == null || text.length() <= chunkingThresholdChars) {
+            return llmService.analyzeText(text == null ? "" : text);
+        }
+
+        List<String> chunks = chunkText(text, chunkSizeChars, chunkOverlapChars);
+        log.info("Chunked document {} into {} chunks ({} chars)",
+                documentId, chunks.size(), text.length());
+
+        List<String> partials = new ArrayList<>(chunks.size());
+        for (int i = 0; i < chunks.size(); i++) {
+            sendEvent(documentId, new AnalysisProgressEvent("ANALYZING",
+                    String.format("Analyzing chunk %d of %d...", i + 1, chunks.size()),
+                    50 + (40 * (i + 1)) / (chunks.size() + 1)));
+            partials.add(llmService.analyzeTextChunk(chunks.get(i), i + 1, chunks.size()));
+        }
+
+        sendEvent(documentId, new AnalysisProgressEvent("ANALYZING",
+                "Consolidating chunk summaries...", 90));
+        return llmService.mergePartialSummaries(partials);
+    }
+
+    /**
+     * Slides a window of {@code chunkSize} chars across {@code text}, advancing
+     * by {@code chunkSize - overlap} each step so consecutive chunks share
+     * {@code overlap} chars of context.
+     */
+    static List<String> chunkText(String text, int chunkSize, int overlap) {
+        if (chunkSize <= 0) {
+            throw new IllegalArgumentException("chunkSize must be > 0");
+        }
+        if (overlap < 0 || overlap >= chunkSize) {
+            throw new IllegalArgumentException("overlap must be in [0, chunkSize)");
+        }
+        if (text == null || text.isEmpty()) return List.of();
+        if (text.length() <= chunkSize) return List.of(text);
+
+        List<String> chunks = new ArrayList<>();
+        int step = chunkSize - overlap;
+        for (int pos = 0; pos < text.length(); pos += step) {
+            int end = Math.min(pos + chunkSize, text.length());
+            chunks.add(text.substring(pos, end));
+            if (end == text.length()) break;
+        }
+        return chunks;
     }
 
     private void parseAndApplyLlmResponse(String raw, AnalysisResult result) {
