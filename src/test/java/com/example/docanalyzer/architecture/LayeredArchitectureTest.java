@@ -14,14 +14,11 @@ import static com.tngtech.archunit.library.Architectures.layeredArchitecture;
  * Executable contract for the ports &amp; adapters layout described in
  * {@code src/docs/layered-architecture-refactor.md}.
  *
- * <p>Phase 1 note: the target packages ({@code web}, {@code domain},
- * {@code persistence}, {@code integration}) are still being populated, so the
- * rules are configured with optional/empty-allowed layers and currently pass
- * vacuously. As classes are moved into these packages in later phases, the
- * rules begin to bite automatically — no edits to this test are required. The
- * legacy packages ({@code controller}, {@code service}, {@code repository},
- * {@code entity}, {@code dto}) are intentionally left unconstrained until the
- * migration relocates them.
+ * <p>Dependencies point inward: {@code web → domain ← persistence} and
+ * {@code web → domain ← integration}. The domain depends on nobody and on no
+ * framework. The {@code config} package is the composition root and is
+ * intentionally left out of the layer set (it may wire any layer); only
+ * dependencies between the four defined layers are considered.
  */
 class LayeredArchitectureTest {
 
@@ -43,16 +40,16 @@ class LayeredArchitectureTest {
                 .layer("Persistence").definedBy("..persistence..")
                 .layer("Integration").definedBy("..integration..")
 
-                // Nothing may depend on the inbound HTTP adapter.
+                // The domain core is the only layer anything may depend on, and
+                // only the adapters (and the web entry point) may depend on it.
+                .whereLayer("Domain").mayOnlyBeAccessedByLayers("Web", "Persistence", "Integration")
+                // The inbound web adapter and the outbound adapters are all
+                // "leaf" layers: nothing in the hexagon depends on them (they are
+                // reached only by the config composition root via dependency
+                // injection, which is not part of the layer set).
                 .whereLayer("Web").mayNotBeAccessedByAnyLayer()
-                // The core may be used by every adapter, but the adapters
-                // (persistence/integration) must not reach into each other.
-                .whereLayer("Persistence").mayOnlyBeAccessedByLayers("Web", "Domain")
-                .whereLayer("Integration").mayOnlyBeAccessedByLayers("Web", "Domain")
-
-                // Empty layers are fine while the migration is in progress.
-                .withOptionalLayers(true)
-                .allowEmptyShould(true);
+                .whereLayer("Persistence").mayNotBeAccessedByAnyLayer()
+                .whereLayer("Integration").mayNotBeAccessedByAnyLayer();
 
         rule.check(productionClasses);
     }
@@ -69,9 +66,7 @@ class LayeredArchitectureTest {
                         "reactor.."
                 )
                 .because("the domain core must stay free of Spring, JPA, Servlet, "
-                        + "PDFBox and Reactor so it is unit-testable in isolation")
-                // Domain is empty in phase 1; allow the rule to pass vacuously.
-                .allowEmptyShould(true);
+                        + "PDFBox and Reactor so it is unit-testable in isolation");
 
         rule.check(productionClasses);
     }
