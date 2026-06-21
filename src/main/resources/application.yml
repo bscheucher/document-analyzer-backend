@@ -1,8 +1,8 @@
 spring:
   datasource:
     url: jdbc:postgresql://localhost:5432/docanalyzer
-    username: ${DB_USERNAME:postgres}
-    password: ${DB_PASSWORD:postgres}
+    username: ${DB_USERNAME:docanalyzer}
+    password: ${DB_PASSWORD:docanalyzer}
   jpa:
     hibernate:
       ddl-auto: validate
