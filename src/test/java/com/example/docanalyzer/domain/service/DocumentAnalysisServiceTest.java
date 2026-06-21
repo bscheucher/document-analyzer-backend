@@ -1,12 +1,14 @@
-package com.example.docanalyzer.service;
+package com.example.docanalyzer.domain.service;
 
 import com.example.docanalyzer.domain.model.AnalysisResult;
 import com.example.docanalyzer.domain.model.Document;
 import com.example.docanalyzer.domain.model.DocumentStatus;
 import com.example.docanalyzer.domain.model.FileType;
 import com.example.docanalyzer.domain.model.User;
+import com.example.docanalyzer.domain.port.in.UploadCommand;
 import com.example.docanalyzer.domain.port.out.DocumentRepositoryPort;
 import com.example.docanalyzer.domain.port.out.LlmPort;
+import com.example.docanalyzer.domain.port.out.ProgressNotifier;
 import com.example.docanalyzer.domain.port.out.StoragePort;
 import com.example.docanalyzer.domain.port.out.TextExtractorPort;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -16,18 +18,14 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.mock.web.MockMultipartFile;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 
-import org.springframework.test.util.ReflectionTestUtils;
-
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
@@ -40,6 +38,7 @@ class DocumentAnalysisServiceTest {
     @Mock StoragePort storageService;
     @Mock LlmPort llmService;
     @Mock TextExtractorPort textExtractor;
+    @Mock ProgressNotifier progressNotifier;
 
     DocumentAnalysisService service;
     User owner;
@@ -49,30 +48,25 @@ class DocumentAnalysisServiceTest {
         owner = new User();
         owner.setId(UUID.randomUUID());
         owner.setEmail("test@example.com");
+        // threshold=100, chunkSize=50, overlap=10 so the chunking tests can
+        // exercise the path with tiny synthetic inputs.
         service = new DocumentAnalysisService(
-                documentRepository, storageService, llmService, textExtractor, new ObjectMapper()
-        );
-        // @Value-injected fields aren't set by the no-Spring constructor — pick
-        // small values so the chunking tests can exercise the path with tiny
-        // synthetic inputs.
-        ReflectionTestUtils.setField(service, "chunkingThresholdChars", 100);
-        ReflectionTestUtils.setField(service, "chunkSizeChars", 50);
-        ReflectionTestUtils.setField(service, "chunkOverlapChars", 10);
+                documentRepository, storageService, llmService, textExtractor,
+                progressNotifier, new ChunkingConfig(100, 50, 10),
+                new LlmResponseParser(new ObjectMapper()));
+    }
+
+    private static UploadCommand uploadCommand(User owner, String filename, String contentType) {
+        return new UploadCommand(owner, filename, contentType, 123L,
+                new ByteArrayInputStream("dummy content".getBytes()));
     }
 
     @Test
     void upload_pdf_savesDocumentWithCorrectFileType() throws IOException {
-        MockMultipartFile file = new MockMultipartFile(
-                "file", "test.pdf", "application/pdf", "dummy content".getBytes()
-        );
-
         when(storageService.store(any(InputStream.class), eq("test.pdf"))).thenReturn("stored-name.pdf");
-        when(documentRepository.save(any(Document.class))).thenAnswer(inv -> {
-            Document doc = inv.getArgument(0);
-            return doc;
-        });
+        when(documentRepository.save(any(Document.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        Document doc = service.upload(file, owner);
+        Document doc = service.upload(uploadCommand(owner, "test.pdf", "application/pdf"));
 
         assertThat(doc.getFileType()).isEqualTo(FileType.PDF);
         assertThat(doc.getFilename()).isEqualTo("test.pdf");
@@ -83,52 +77,18 @@ class DocumentAnalysisServiceTest {
 
     @Test
     void upload_image_detectsImageFileType() throws IOException {
-        MockMultipartFile file = new MockMultipartFile(
-                "file", "scan.jpg", "image/jpeg", "dummy bytes".getBytes()
-        );
-
         when(storageService.store(any(InputStream.class), eq("scan.jpg"))).thenReturn("stored-scan.jpg");
         when(documentRepository.save(any(Document.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        Document doc = service.upload(file, owner);
+        Document doc = service.upload(uploadCommand(owner, "scan.jpg", "image/jpeg"));
 
         assertThat(doc.getFileType()).isEqualTo(FileType.IMAGE);
     }
 
-    @Test
-    void subscribe_returnsEmitter_forKnownDocument() {
-        UUID id = UUID.randomUUID();
-        Document doc = new Document();
-        doc.setStatus(DocumentStatus.PENDING);
-
-        when(documentRepository.findById(id)).thenReturn(Optional.of(doc));
-
-        var emitter = service.subscribe(id);
-
-        assertThat(emitter).isNotNull();
-    }
+    // ── analyze pipeline ─────────────────────────────────────────────────────
 
     @Test
-    void subscribe_reconnect_completesPriorEmitter() {
-        UUID id = UUID.randomUUID();
-        Document doc = new Document();
-        doc.setStatus(DocumentStatus.PENDING);
-        when(documentRepository.findById(id)).thenReturn(Optional.of(doc));
-
-        var first = service.subscribe(id);
-        var second = service.subscribe(id);
-
-        // The first emitter must be in a terminal state — sending on a
-        // completed SseEmitter throws IllegalStateException.
-        assertThat(first).isNotSameAs(second);
-        assertThatThrownBy(() -> first.send("late"))
-                .isInstanceOf(IllegalStateException.class);
-    }
-
-    // ── analyzeAsync pipeline ────────────────────────────────────────────────
-
-    @Test
-    void analyzeAsync_image_happyPath_parsesJsonAndPassesContentType() throws IOException {
+    void analyze_image_happyPath_parsesJsonAndPassesContentType() throws IOException {
         UUID id = UUID.randomUUID();
         Document doc = imageDoc(id, "image/png");
 
@@ -138,7 +98,7 @@ class DocumentAnalysisServiceTest {
                 {"documentType":"Invoice","summary":"Q1 invoice","keyTopics":["billing","Q1"]}
                 """);
 
-        service.analyzeAsync(id);
+        service.analyze(id);
 
         verify(documentRepository).updateStatus(id, DocumentStatus.EXTRACTING);
         verify(documentRepository).updateStatus(id, DocumentStatus.ANALYZING);
@@ -150,10 +110,11 @@ class DocumentAnalysisServiceTest {
         assertThat(result.getSummary()).isEqualTo("Q1 invoice");
         assertThat(result.getKeyTopics()).containsExactly("billing", "Q1");
         verify(documentRepository, never()).failAnalysis(any(), any(), any());
+        verify(progressNotifier).complete(id);
     }
 
     @Test
-    void analyzeAsync_image_nullContentType_fallsBackToJpeg() throws IOException {
+    void analyze_image_nullContentType_fallsBackToJpeg() throws IOException {
         UUID id = UUID.randomUUID();
         Document doc = imageDoc(id, null);
 
@@ -162,13 +123,13 @@ class DocumentAnalysisServiceTest {
         when(llmService.analyzeImage(any(), eq("image/jpeg")))
                 .thenReturn("{\"documentType\":\"X\",\"summary\":\"y\",\"keyTopics\":[]}");
 
-        service.analyzeAsync(id);
+        service.analyze(id);
 
         verify(llmService).analyzeImage(any(), eq("image/jpeg"));
     }
 
     @Test
-    void analyzeAsync_llmThrows_persistsFailedWithMessage() throws IOException {
+    void analyze_llmThrows_persistsFailedWithMessage() throws IOException {
         UUID id = UUID.randomUUID();
         Document doc = imageDoc(id, "image/png");
 
@@ -177,14 +138,15 @@ class DocumentAnalysisServiceTest {
         when(llmService.analyzeImage(any(), any()))
                 .thenThrow(new RuntimeException("Ollama unreachable"));
 
-        service.analyzeAsync(id);
+        service.analyze(id);
 
         verify(documentRepository).failAnalysis(eq(id), any(AnalysisResult.class), eq("Ollama unreachable"));
         verify(documentRepository, never()).completeAnalysis(any(), any());
+        verify(progressNotifier).complete(id);
     }
 
     @Test
-    void analyzeAsync_parsesJsonWrappedInProseAndFences() throws IOException {
+    void analyze_parsesJsonWrappedInProseAndFences() throws IOException {
         UUID id = UUID.randomUUID();
         Document doc = imageDoc(id, "image/png");
 
@@ -195,7 +157,7 @@ class DocumentAnalysisServiceTest {
                         "{\"documentType\":\"Letter\",\"summary\":\"S\",\"keyTopics\":[\"a\"]}\n" +
                         "```\nLet me know if you need more.");
 
-        service.analyzeAsync(id);
+        service.analyze(id);
 
         ArgumentCaptor<AnalysisResult> captor = ArgumentCaptor.forClass(AnalysisResult.class);
         verify(documentRepository).completeAnalysis(eq(id), captor.capture());
@@ -204,20 +166,19 @@ class DocumentAnalysisServiceTest {
     }
 
     @Test
-    void analyzeAsync_picksRealJson_whenExampleBlockPrecedesIt() throws IOException {
+    void analyze_picksRealJson_whenExampleBlockPrecedesIt() throws IOException {
         UUID id = UUID.randomUUID();
         Document doc = imageDoc(id, "image/png");
 
         when(documentRepository.loadWithResult(id)).thenReturn(doc);
         when(storageService.readBytes(any())).thenReturn(new byte[]{0});
         // First {...} is an example structure with no expected fields; the
-        // real analysis follows. The old indexOf/lastIndexOf slicer would
-        // grab everything from the first { to the last }, breaking the parse.
+        // real analysis follows.
         when(llmService.analyzeImage(any(), any())).thenReturn(
                 "Example: {\"foo\": \"bar\"}.\nResult:\n" +
                         "{\"documentType\":\"Invoice\",\"summary\":\"Real\",\"keyTopics\":[\"x\"]}");
 
-        service.analyzeAsync(id);
+        service.analyze(id);
 
         ArgumentCaptor<AnalysisResult> captor = ArgumentCaptor.forClass(AnalysisResult.class);
         verify(documentRepository).completeAnalysis(eq(id), captor.capture());
@@ -227,7 +188,7 @@ class DocumentAnalysisServiceTest {
     }
 
     @Test
-    void analyzeAsync_handlesBracesInsideStringValues() throws IOException {
+    void analyze_handlesBracesInsideStringValues() throws IOException {
         UUID id = UUID.randomUUID();
         Document doc = imageDoc(id, "image/png");
 
@@ -238,7 +199,7 @@ class DocumentAnalysisServiceTest {
                         "\"summary\":\"Body mentions a } char and \\\"quotes\\\".\"," +
                         "\"keyTopics\":[\"a\"]}");
 
-        service.analyzeAsync(id);
+        service.analyze(id);
 
         ArgumentCaptor<AnalysisResult> captor = ArgumentCaptor.forClass(AnalysisResult.class);
         verify(documentRepository).completeAnalysis(eq(id), captor.capture());
@@ -248,7 +209,7 @@ class DocumentAnalysisServiceTest {
     }
 
     @Test
-    void analyzeAsync_nonJsonResponse_storesRawAsSummary() throws IOException {
+    void analyze_nonJsonResponse_storesRawAsSummary() throws IOException {
         UUID id = UUID.randomUUID();
         Document doc = imageDoc(id, "image/png");
 
@@ -256,7 +217,7 @@ class DocumentAnalysisServiceTest {
         when(storageService.readBytes(any())).thenReturn(new byte[]{0});
         when(llmService.analyzeImage(any(), any())).thenReturn("Sorry, I cannot analyze this.");
 
-        service.analyzeAsync(id);
+        service.analyze(id);
 
         ArgumentCaptor<AnalysisResult> captor = ArgumentCaptor.forClass(AnalysisResult.class);
         verify(documentRepository).completeAnalysis(eq(id), captor.capture());
@@ -264,44 +225,6 @@ class DocumentAnalysisServiceTest {
         assertThat(result.getSummary()).isEqualTo("Sorry, I cannot analyze this.");
         assertThat(result.getDocumentType()).isNull();
         assertThat(result.getKeyTopics()).isNull();
-    }
-
-    // ── chunkText (pure function) ────────────────────────────────────────────
-
-    @Test
-    void chunkText_shorterThanChunkSize_returnsSingleChunk() {
-        List<String> chunks = DocumentAnalysisService.chunkText("hello", 100, 10);
-        assertThat(chunks).containsExactly("hello");
-    }
-
-    @Test
-    void chunkText_emptyOrNull_returnsEmpty() {
-        assertThat(DocumentAnalysisService.chunkText(null, 100, 10)).isEmpty();
-        assertThat(DocumentAnalysisService.chunkText("", 100, 10)).isEmpty();
-    }
-
-    @Test
-    void chunkText_longerThanChunkSize_splitsWithOverlap() {
-        // 30 chars, chunk=10, overlap=2 → step=8, so chunks start at 0, 8, 16, 24.
-        String text = "abcdefghijklmnopqrstuvwxyz1234";
-        List<String> chunks = DocumentAnalysisService.chunkText(text, 10, 2);
-
-        assertThat(chunks).containsExactly(
-                "abcdefghij",   // 0..10
-                "ijklmnopqr",   // 8..18  — first 2 chars overlap with previous
-                "qrstuvwxyz",   // 16..26
-                "yz1234"        // 24..30 — short tail
-        );
-    }
-
-    @Test
-    void chunkText_invalidConfig_throws() {
-        assertThatThrownBy(() -> DocumentAnalysisService.chunkText("x", 0, 0))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> DocumentAnalysisService.chunkText("x", 10, 10))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> DocumentAnalysisService.chunkText("x", 10, -1))
-                .isInstanceOf(IllegalArgumentException.class);
     }
 
     // ── analyzeTextMaybeChunked orchestration ────────────────────────────────

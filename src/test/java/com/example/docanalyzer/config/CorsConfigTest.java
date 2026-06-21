@@ -1,9 +1,11 @@
 package com.example.docanalyzer.config;
 
 import com.example.docanalyzer.controller.DocumentController;
+import com.example.docanalyzer.domain.port.in.DocumentAnalysisUseCase;
 import com.example.docanalyzer.domain.port.out.DocumentRepositoryPort;
 import com.example.docanalyzer.service.CurrentUserProvider;
-import com.example.docanalyzer.service.DocumentAnalysisService;
+import com.example.docanalyzer.web.AsyncAnalysisLauncher;
+import com.example.docanalyzer.web.SseProgressNotifier;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -22,9 +24,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class CorsConfigTest {
 
     @Autowired MockMvc mockMvc;
-    @MockBean DocumentAnalysisService analysisService;
+    @MockBean DocumentAnalysisUseCase analysisService;
     @MockBean DocumentRepositoryPort documentRepository;
     @MockBean CurrentUserProvider currentUserProvider;
+    @MockBean AsyncAnalysisLauncher analysisLauncher;
+    @MockBean SseProgressNotifier progressNotifier;
 
     @Test
     void preflight_fromAllowedOrigin_returnsAllowOriginHeader() throws Exception {

@@ -3,12 +3,15 @@ package com.example.docanalyzer.controller;
 import com.example.docanalyzer.domain.model.AnalysisResult;
 import com.example.docanalyzer.domain.model.Document;
 import com.example.docanalyzer.domain.model.User;
+import com.example.docanalyzer.domain.port.in.DocumentAnalysisUseCase;
+import com.example.docanalyzer.domain.port.in.UploadCommand;
 import com.example.docanalyzer.domain.port.out.DocumentRepositoryPort;
 import com.example.docanalyzer.dto.AnalysisResultDto;
 import com.example.docanalyzer.dto.DocumentDetailResponse;
 import com.example.docanalyzer.dto.DocumentUploadResponse;
 import com.example.docanalyzer.service.CurrentUserProvider;
-import com.example.docanalyzer.service.DocumentAnalysisService;
+import com.example.docanalyzer.web.AsyncAnalysisLauncher;
+import com.example.docanalyzer.web.SseProgressNotifier;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -19,6 +22,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 @RestController
@@ -26,9 +30,11 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class DocumentController {
 
-    private final DocumentAnalysisService analysisService;
+    private final DocumentAnalysisUseCase analysisService;
     private final DocumentRepositoryPort documentRepository;
     private final CurrentUserProvider currentUserProvider;
+    private final AsyncAnalysisLauncher analysisLauncher;
+    private final SseProgressNotifier progressNotifier;
 
     /**
      * POST /api/documents/upload
@@ -40,10 +46,12 @@ public class DocumentController {
 
         validateFile(file);
         User owner = currentUserProvider.getCurrentUser();
-        Document doc = analysisService.upload(file, owner);
+        Document doc = analysisService.upload(new UploadCommand(
+                owner, file.getOriginalFilename(), file.getContentType(),
+                file.getSize(), file.getInputStream()));
 
         // Fire-and-forget: start analysis in background thread
-        analysisService.analyzeAsync(doc.getId());
+        analysisLauncher.launch(doc.getId());
 
         return ResponseEntity.accepted().body(toUploadResponse(doc));
     }
@@ -56,9 +64,11 @@ public class DocumentController {
     @GetMapping(value = "/{id}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public ResponseEntity<SseEmitter> stream(@PathVariable UUID id) {
         UUID ownerId = currentUserProvider.getCurrentUser().getId();
-        return documentRepository.findByIdAndOwner(id, ownerId).isPresent()
-                ? ResponseEntity.ok(analysisService.subscribe(id))
-                : ResponseEntity.notFound().build();
+        Optional<Document> doc = documentRepository.findByIdAndOwner(id, ownerId);
+        if (doc.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok(progressNotifier.subscribe(id, doc.get().getStatus()));
     }
 
     /**
@@ -92,7 +102,7 @@ public class DocumentController {
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(@PathVariable UUID id) {
         User owner = currentUserProvider.getCurrentUser();
-        return analysisService.delete(id, owner)
+        return analysisService.delete(id, owner.getId())
                 ? ResponseEntity.noContent().build()
                 : ResponseEntity.notFound().build();
     }

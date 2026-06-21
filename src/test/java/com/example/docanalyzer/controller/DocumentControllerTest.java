@@ -4,9 +4,12 @@ import com.example.docanalyzer.domain.model.Document;
 import com.example.docanalyzer.domain.model.DocumentStatus;
 import com.example.docanalyzer.domain.model.FileType;
 import com.example.docanalyzer.domain.model.User;
+import com.example.docanalyzer.domain.port.in.DocumentAnalysisUseCase;
+import com.example.docanalyzer.domain.port.in.UploadCommand;
 import com.example.docanalyzer.domain.port.out.DocumentRepositoryPort;
 import com.example.docanalyzer.service.CurrentUserProvider;
-import com.example.docanalyzer.service.DocumentAnalysisService;
+import com.example.docanalyzer.web.AsyncAnalysisLauncher;
+import com.example.docanalyzer.web.SseProgressNotifier;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -28,16 +31,20 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class DocumentControllerTest {
 
-    @Mock DocumentAnalysisService analysisService;
+    @Mock DocumentAnalysisUseCase analysisService;
     @Mock DocumentRepositoryPort documentRepository;
     @Mock CurrentUserProvider currentUserProvider;
+    @Mock AsyncAnalysisLauncher analysisLauncher;
+    @Mock SseProgressNotifier progressNotifier;
 
     DocumentController controller;
     User owner;
 
     @BeforeEach
     void setUp() {
-        controller = new DocumentController(analysisService, documentRepository, currentUserProvider);
+        controller = new DocumentController(
+                analysisService, documentRepository, currentUserProvider,
+                analysisLauncher, progressNotifier);
         owner = new User();
         owner.setId(UUID.randomUUID());
         owner.setEmail("test@example.com");
@@ -54,12 +61,12 @@ class DocumentControllerTest {
                 "file", "doc.pdf", "application/pdf",
                 "%PDF-1.4\nsome content".getBytes());
         Document doc = uploadedDoc();
-        when(analysisService.upload(file, owner)).thenReturn(doc);
+        when(analysisService.upload(any(UploadCommand.class))).thenReturn(doc);
 
         ResponseEntity<?> response = controller.upload(file);
 
         assertThat(response.getStatusCode().value()).isEqualTo(202);
-        verify(analysisService).analyzeAsync(doc.getId());
+        verify(analysisLauncher).launch(doc.getId());
     }
 
     @Test
@@ -69,7 +76,7 @@ class DocumentControllerTest {
                 0, 0, 0, 0, 0, 0, 0, 0
         };
         MockMultipartFile file = new MockMultipartFile("file", "scan.jpg", "image/jpeg", jpeg);
-        when(analysisService.upload(file, owner)).thenReturn(uploadedDoc());
+        when(analysisService.upload(any(UploadCommand.class))).thenReturn(uploadedDoc());
 
         ResponseEntity<?> response = controller.upload(file);
 
@@ -83,7 +90,7 @@ class DocumentControllerTest {
                 0, 0, 0, 0
         };
         MockMultipartFile file = new MockMultipartFile("file", "scan.png", "image/png", png);
-        when(analysisService.upload(file, owner)).thenReturn(uploadedDoc());
+        when(analysisService.upload(any(UploadCommand.class))).thenReturn(uploadedDoc());
 
         ResponseEntity<?> response = controller.upload(file);
 
@@ -94,7 +101,7 @@ class DocumentControllerTest {
     void upload_validGif_succeeds() throws IOException {
         byte[] gif = "GIF89a......".getBytes();
         MockMultipartFile file = new MockMultipartFile("file", "anim.gif", "image/gif", gif);
-        when(analysisService.upload(file, owner)).thenReturn(uploadedDoc());
+        when(analysisService.upload(any(UploadCommand.class))).thenReturn(uploadedDoc());
 
         ResponseEntity<?> response = controller.upload(file);
 
@@ -109,7 +116,7 @@ class DocumentControllerTest {
                 'W', 'E', 'B', 'P'
         };
         MockMultipartFile file = new MockMultipartFile("file", "pic.webp", "image/webp", webp);
-        when(analysisService.upload(file, owner)).thenReturn(uploadedDoc());
+        when(analysisService.upload(any(UploadCommand.class))).thenReturn(uploadedDoc());
 
         ResponseEntity<?> response = controller.upload(file);
 
@@ -229,18 +236,18 @@ class DocumentControllerTest {
         ResponseEntity<?> response = controller.stream(id);
 
         assertThat(response.getStatusCode().value()).isEqualTo(404);
-        verify(analysisService, org.mockito.Mockito.never()).subscribe(any());
+        verify(progressNotifier, org.mockito.Mockito.never()).subscribe(any(), any());
     }
 
     @Test
     void delete_passesCurrentUserToService() {
         UUID id = UUID.randomUUID();
-        when(analysisService.delete(id, owner)).thenReturn(true);
+        when(analysisService.delete(id, owner.getId())).thenReturn(true);
 
         ResponseEntity<?> response = controller.delete(id);
 
         assertThat(response.getStatusCode().value()).isEqualTo(204);
-        verify(analysisService).delete(id, owner);
+        verify(analysisService).delete(id, owner.getId());
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────
