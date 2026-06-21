@@ -1,4 +1,4 @@
-package com.example.docanalyzer.service;
+package com.example.docanalyzer.integration.storage;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -11,16 +11,16 @@ import java.nio.file.Path;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-class StorageServiceTest {
+class FilesystemStorageAdapterTest {
 
     @TempDir
     Path tempDir;
 
-    private StorageService storage;
+    private FilesystemStorageAdapter storage;
 
     @BeforeEach
     void setUp() throws IOException {
-        storage = new StorageService(tempDir.toString());
+        storage = new FilesystemStorageAdapter(tempDir.toString());
     }
 
     // ── load() path-traversal guard ─────────────────────────────────────────
@@ -61,7 +61,7 @@ class StorageServiceTest {
                 "file", "evil.txt/../../etc/passwd", "application/pdf",
                 "%PDF-1.4".getBytes());
 
-        String storedName = storage.store(file);
+        String storedName = storage.store(file.getInputStream(), file.getOriginalFilename());
 
         assertThat(storedName).endsWith(".bin");
         assertThat(storedName).doesNotContain("/");
@@ -75,7 +75,7 @@ class StorageServiceTest {
                 "file", "report.pdf", "application/pdf",
                 "%PDF-1.4".getBytes());
 
-        String storedName = storage.store(file);
+        String storedName = storage.store(file.getInputStream(), file.getOriginalFilename());
 
         assertThat(storedName).endsWith(".pdf");
         assertThat(tempDir.resolve(storedName)).exists();
@@ -87,7 +87,7 @@ class StorageServiceTest {
                 "file", "scan.JPG", "image/jpeg",
                 new byte[]{1, 2, 3});
 
-        String storedName = storage.store(file);
+        String storedName = storage.store(file.getInputStream(), file.getOriginalFilename());
 
         assertThat(storedName).endsWith(".jpg");
     }

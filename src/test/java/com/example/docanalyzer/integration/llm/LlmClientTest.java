@@ -1,4 +1,4 @@
-package com.example.docanalyzer.service;
+package com.example.docanalyzer.integration.llm;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-class LlmServiceTest {
+class LlmClientTest {
 
     // ── extractAnthropicText (pure helper) ───────────────────────────────────
 
@@ -28,7 +28,7 @@ class LlmServiceTest {
                 "content", List.of(Map.of("type", "text", "text", "hello"))
         );
 
-        assertThat(LlmService.extractAnthropicText(response)).isEqualTo("hello");
+        assertThat(LlmClient.extractAnthropicText(response)).isEqualTo("hello");
     }
 
     @Test
@@ -42,7 +42,7 @@ class LlmServiceTest {
                 )
         );
 
-        assertThat(LlmService.extractAnthropicText(response)).isEqualTo("actual answer");
+        assertThat(LlmClient.extractAnthropicText(response)).isEqualTo("actual answer");
     }
 
     @Test
@@ -51,15 +51,15 @@ class LlmServiceTest {
                 "content", List.of(Map.of("type", "tool_use", "name", "x"))
         );
 
-        assertThat(LlmService.extractAnthropicText(response)).isEmpty();
+        assertThat(LlmClient.extractAnthropicText(response)).isEmpty();
     }
 
     @Test
     void extractAnthropicText_returnsEmpty_whenContentMissingOrWrongShape() {
-        assertThat(LlmService.extractAnthropicText(null)).isEmpty();
-        assertThat(LlmService.extractAnthropicText(Map.of())).isEmpty();
-        assertThat(LlmService.extractAnthropicText(Map.of("content", List.of()))).isEmpty();
-        assertThat(LlmService.extractAnthropicText(Map.of("content", "not-a-list"))).isEmpty();
+        assertThat(LlmClient.extractAnthropicText(null)).isEmpty();
+        assertThat(LlmClient.extractAnthropicText(Map.of())).isEmpty();
+        assertThat(LlmClient.extractAnthropicText(Map.of("content", List.of()))).isEmpty();
+        assertThat(LlmClient.extractAnthropicText(Map.of("content", "not-a-list"))).isEmpty();
     }
 
     // ── Outgoing HTTP shape (MockWebServer) ──────────────────────────────────
@@ -82,7 +82,7 @@ class LlmServiceTest {
     void analyzeText_ollama_postsToGenerateAndReturnsResponseField() throws Exception {
         enqueueJson("{\"response\":\"OLLAMA TEXT\"}");
 
-        LlmService llm = newService("ollama");
+        LlmClient llm = newClient("ollama");
         String result = llm.analyzeText("body of the PDF");
 
         assertThat(result).isEqualTo("OLLAMA TEXT");
@@ -103,7 +103,7 @@ class LlmServiceTest {
     void analyzeImage_ollama_postsImageAsBase64InImagesArray() throws Exception {
         enqueueJson("{\"response\":\"OLLAMA VISION\"}");
 
-        LlmService llm = newService("ollama");
+        LlmClient llm = newClient("ollama");
         byte[] bytes = {0x12, 0x34, 0x56};
         String result = llm.analyzeImage(bytes, "image/png");
 
@@ -125,7 +125,7 @@ class LlmServiceTest {
     void analyzeText_anthropic_postsMessagesAndExtractsTextBlock() throws Exception {
         enqueueJson("{\"content\":[{\"type\":\"text\",\"text\":\"CLAUDE TEXT\"}]}");
 
-        LlmService llm = newService("anthropic");
+        LlmClient llm = newClient("anthropic");
         String result = llm.analyzeText("body of the PDF");
 
         assertThat(result).isEqualTo("CLAUDE TEXT");
@@ -153,7 +153,7 @@ class LlmServiceTest {
     void analyzeImage_anthropic_postsImageBlockBeforeTextBlock() throws Exception {
         enqueueJson("{\"content\":[{\"type\":\"text\",\"text\":\"CLAUDE VISION\"}]}");
 
-        LlmService llm = newService("anthropic");
+        LlmClient llm = newClient("anthropic");
         byte[] bytes = {0x01, 0x02, 0x03};
         String result = llm.analyzeImage(bytes, "image/jpeg");
 
@@ -206,9 +206,9 @@ class LlmServiceTest {
      * decides which one is actually hit. Distinct model names per role let
      * the assertions also catch text-vs-vision mixups.
      */
-    private LlmService newService(String provider) {
+    private LlmClient newClient(String provider) {
         String baseUrl = server.url("/").toString();
-        return new LlmService(
+        return new LlmClient(
                 provider,
                 Duration.ofSeconds(2),
                 Duration.ofSeconds(5),

@@ -1,5 +1,8 @@
 package com.example.docanalyzer.service;
 
+import com.example.docanalyzer.domain.port.out.LlmPort;
+import com.example.docanalyzer.domain.port.out.StoragePort;
+import com.example.docanalyzer.domain.port.out.TextExtractorPort;
 import com.example.docanalyzer.entity.AnalysisResult;
 import com.example.docanalyzer.entity.Document;
 import com.example.docanalyzer.entity.User;
@@ -14,6 +17,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -32,8 +36,9 @@ class DocumentAnalysisServiceTest {
 
     @Mock DocumentRepository documentRepository;
     @Mock DocumentPersistenceService persistence;
-    @Mock StorageService storageService;
-    @Mock LlmService llmService;
+    @Mock StoragePort storageService;
+    @Mock LlmPort llmService;
+    @Mock TextExtractorPort textExtractor;
 
     DocumentAnalysisService service;
     User owner;
@@ -44,7 +49,7 @@ class DocumentAnalysisServiceTest {
         owner.setId(UUID.randomUUID());
         owner.setEmail("test@example.com");
         service = new DocumentAnalysisService(
-                documentRepository, persistence, storageService, llmService, new ObjectMapper()
+                documentRepository, persistence, storageService, llmService, textExtractor, new ObjectMapper()
         );
         // @Value-injected fields aren't set by the no-Spring constructor — pick
         // small values so the chunking tests can exercise the path with tiny
@@ -60,7 +65,7 @@ class DocumentAnalysisServiceTest {
                 "file", "test.pdf", "application/pdf", "dummy content".getBytes()
         );
 
-        when(storageService.store(file)).thenReturn("stored-name.pdf");
+        when(storageService.store(any(InputStream.class), eq("test.pdf"))).thenReturn("stored-name.pdf");
         when(documentRepository.save(any(Document.class))).thenAnswer(inv -> {
             Document doc = inv.getArgument(0);
             return doc;
@@ -81,7 +86,7 @@ class DocumentAnalysisServiceTest {
                 "file", "scan.jpg", "image/jpeg", "dummy bytes".getBytes()
         );
 
-        when(storageService.store(file)).thenReturn("stored-scan.jpg");
+        when(storageService.store(any(InputStream.class), eq("scan.jpg"))).thenReturn("stored-scan.jpg");
         when(documentRepository.save(any(Document.class))).thenAnswer(inv -> inv.getArgument(0));
 
         Document doc = service.upload(file, owner);

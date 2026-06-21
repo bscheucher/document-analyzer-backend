@@ -1,5 +1,6 @@
-package com.example.docanalyzer.service;
+package com.example.docanalyzer.integration.llm;
 
+import com.example.docanalyzer.domain.port.out.LlmPort;
 import io.netty.channel.ChannelOption;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -15,12 +16,12 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * Thin wrapper around Ollama (default) or Anthropic API.
- * Controlled by app.ai.provider in application.yml.
+ * {@link LlmPort} backed by Ollama (default) or the Anthropic API.
+ * Controlled by {@code app.ai.provider} in application.yml.
  */
 @Slf4j
 @Service
-public class LlmService {
+public class LlmClient implements LlmPort {
 
     private static final String ANALYSIS_PROMPT = """
             Analyze the following document and respond in JSON with this exact structure:
@@ -63,7 +64,7 @@ public class LlmService {
     private final String ollamaTextModel;
     private final String anthropicModel;
 
-    public LlmService(
+    public LlmClient(
             @Value("${app.ai.provider}") String provider,
             @Value("${app.ai.connect-timeout}") Duration connectTimeout,
             @Value("${app.ai.response-timeout}") Duration responseTimeout,
@@ -105,6 +106,7 @@ public class LlmService {
      * Analyze extracted text from a PDF in a single call. Use this when the
      * full text fits comfortably in the model's context.
      */
+    @Override
     public String analyzeText(String extractedText) {
         return callTextProvider(ANALYSIS_PROMPT + "\n\n" + extractedText);
     }
@@ -114,6 +116,7 @@ public class LlmService {
      * at part {@code chunkIndex} of {@code chunkTotal} so the partial summary
      * is appropriately scoped.
      */
+    @Override
     public String analyzeTextChunk(String chunkText, int chunkIndex, int chunkTotal) {
         String prompt = String.format(CHUNK_PROMPT_TEMPLATE, chunkIndex, chunkTotal) + "\n\n" + chunkText;
         return callTextProvider(prompt);
@@ -123,6 +126,7 @@ public class LlmService {
      * Consolidate the partial JSON analyses of a chunked document into a
      * single final JSON analysis.
      */
+    @Override
     public String mergePartialSummaries(List<String> partials) {
         StringBuilder body = new StringBuilder();
         for (int i = 0; i < partials.size(); i++) {
@@ -136,6 +140,7 @@ public class LlmService {
      * Analyze an image document (e.g. scanned JPG/PNG).
      * Ollama uses llava; Anthropic uses claude's vision API.
      */
+    @Override
     public String analyzeImage(byte[] imageBytes, String mimeType) {
         String base64 = Base64.getEncoder().encodeToString(imageBytes);
         return switch (provider) {

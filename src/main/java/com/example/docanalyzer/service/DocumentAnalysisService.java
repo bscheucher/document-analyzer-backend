@@ -1,5 +1,8 @@
 package com.example.docanalyzer.service;
 
+import com.example.docanalyzer.domain.port.out.LlmPort;
+import com.example.docanalyzer.domain.port.out.StoragePort;
+import com.example.docanalyzer.domain.port.out.TextExtractorPort;
 import com.example.docanalyzer.dto.AnalysisProgressEvent;
 import com.example.docanalyzer.entity.AnalysisResult;
 import com.example.docanalyzer.entity.Document;
@@ -9,9 +12,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.pdfbox.Loader;
-import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.text.PDFTextStripper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
@@ -19,7 +19,7 @@ import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
-import java.nio.file.Path;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -32,8 +32,9 @@ public class DocumentAnalysisService {
 
     private final DocumentRepository documentRepository;
     private final DocumentPersistenceService persistence;
-    private final StorageService storageService;
-    private final LlmService llmService;
+    private final StoragePort storageService;
+    private final LlmPort llmService;
+    private final TextExtractorPort textExtractor;
     private final ObjectMapper objectMapper;
 
     @Value("${app.ai.chunking.threshold-chars:20000}")
@@ -51,7 +52,10 @@ public class DocumentAnalysisService {
     // ── Upload ───────────────────────────────────────────────────────────────
 
     public Document upload(MultipartFile file, User owner) throws IOException {
-        String storagePath = storageService.store(file);
+        String storagePath;
+        try (InputStream is = file.getInputStream()) {
+            storagePath = storageService.store(is, file.getOriginalFilename());
+        }
         Document.FileType fileType = detectFileType(file.getContentType());
 
         Document doc = new Document();
@@ -165,10 +169,8 @@ public class DocumentAnalysisService {
 
     private String extractText(Document doc) throws IOException {
         if (doc.getFileType() == Document.FileType.PDF) {
-            Path pdfPath = storageService.load(doc.getStoragePath());
-            try (PDDocument pdf = Loader.loadPDF(pdfPath.toFile())) {
-                return new PDFTextStripper().getText(pdf);
-            }
+            byte[] content = storageService.readBytes(doc.getStoragePath());
+            return textExtractor.extractText(content, doc.getContentType());
         }
         return "";
     }
