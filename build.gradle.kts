@@ -54,6 +54,9 @@ dependencies {
     // Testing
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+
+    // Architecture enforcement (layered / hexagonal dependency rules)
+    testImplementation("com.tngtech.archunit:archunit-junit5:1.3.0")
 }
 
 tasks.withType<Test> {
