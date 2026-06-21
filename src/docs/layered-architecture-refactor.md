@@ -1,9 +1,15 @@
 # Layered Architecture Refactor — Ports & Adapters (Hexagonal)
 
-- **Status:** Proposed
+- **Status:** Implemented (commits `fa97a00` … `395ef7e` on `refactor-layered-architecture`)
 - **Branch:** `refactor-layered-architecture`
 - **Date:** 2026-06-21
 - **Scope:** Internal package/structure refactor of `smart-doc-analyzer_backend`. **No change to HTTP API, DB schema, or runtime behavior.**
+
+> **As-built note.** This document was written as the design proposal and then kept as the record.
+> Sections 1–8 have been updated to match what shipped; **§9** is the actual phase log (with the
+> deviations from the original plan), and **§12** summarises the notable as-built differences. The
+> refactor was verified at runtime (`./gradlew bootRun` against Postgres) after the persistence and
+> orchestration phases, in addition to the unit/slice suite staying green at every commit.
 
 ---
 
@@ -38,29 +44,29 @@ Base package: `com.example.docanalyzer`
 ```
 docanalyzer
 ├── web/                         INBOUND adapter (HTTP)
-│   ├── DocumentController
+│   ├── DocumentController       (magic-byte validation still inline — see §12)
 │   ├── dto/                     DocumentUploadResponse, DocumentDetailResponse,
 │   │                            AnalysisResultDto, AnalysisProgressEvent
-│   ├── UploadValidator          multipart + magic-byte validation
 │   ├── SseProgressNotifier      implements domain ProgressNotifier (owns the emitter map)
 │   ├── AsyncAnalysisLauncher    @Async wrapper → calls domain use case
-│   ├── WebCurrentUserProvider   implements domain CurrentUserProvider port
-│   └── GlobalExceptionHandler
+│   ├── CurrentUserProvider      resolves the current user (concrete; no port — see §12)
+│   ├── GlobalExceptionHandler   @RestControllerAdvice for built-ins + IllegalArgument
+│   └── UploadSizeExceptionHandler  413 for oversized uploads (split out — see §12)
 │
 ├── domain/                      CORE — no Spring / JPA / Servlet / PDFBox / Reactor
 │   ├── model/                   Document, AnalysisResult, User, FileType,
-│   │                            DocumentStatus, AnalysisProgress, AnalysisOutcome
+│   │                            DocumentStatus, AnalysisProgress
 │   ├── port/
-│   │   ├── in/                  AnalyzeDocumentUseCase, ManageDocumentsUseCase
+│   │   ├── in/                  DocumentAnalysisUseCase, UploadCommand
 │   │   └── out/                 DocumentRepositoryPort, UserRepositoryPort,
 │   │                            StoragePort, TextExtractorPort, LlmPort,
-│   │                            ProgressNotifier, CurrentUserProvider
+│   │                            ProgressNotifier
 │   └── service/                 DocumentAnalysisService (orchestration),
-│                                LlmResponseParser, TextChunker
+│                                LlmResponseParser, TextChunker, ChunkingConfig
 │
 ├── persistence/                 OUTBOUND adapter (DB)
 │   ├── entity/                  DocumentEntity, AnalysisResultEntity, UserEntity (@Entity)
-│   ├── repository/              SpringDataDocumentRepository, SpringDataUserRepository
+│   ├── repository/              DocumentJpaRepository, UserJpaRepository
 │   ├── DocumentRepositoryAdapter implements DocumentRepositoryPort (@Transactional here)
 │   ├── UserRepositoryAdapter     implements UserRepositoryPort
 │   └── mapper/                  PersistenceMapper (entity ↔ domain model)
@@ -72,12 +78,12 @@ docanalyzer
 │
 └── config/                      Spring wiring & cross-cutting
     ├── AsyncConfig, WebMvcConfig
-    └── BeanConfig               wires adapters into domain services (constructor injection)
+    └── DomainConfig             wires adapters into the domain service (constructor injection)
 ```
 
-> **Cleanup:** delete the stray empty directory literally named
+> **Cleanup (done):** the stray empty directory literally named
 > `src/main/java/com/example/docanalyzer/{controller,service,repository,entity,dto,config,mapper}`
-> — it is a botched shell brace-expansion artifact, not a real package.
+> — a botched shell brace-expansion artifact — was removed in Phase 1.
 
 ---
 
@@ -109,9 +115,13 @@ The JPA-annotated classes in `entity/` are **split in two**:
    the `documents`/`analysis_results`/`users` tables). A `PersistenceMapper` translates entity ↔ domain
    model at the adapter boundary.
 
-The domain `Document` is mutable enough to carry status transitions, or modeled as an immutable record
-with `withStatus(...)` copy methods — implementer's choice; **recommend immutable records + explicit
-adapter writes** so the domain never relies on JPA dirty-checking.
+**As built:** the domain `Document`/`AnalysisResult`/`User` are **mutable Lombok `@Getter/@Setter`
+POJOs**, not immutable records. The orchestrator builds an `AnalysisResult` by mutation and the
+persistence adapter performs the writes explicitly (it never relies on JPA dirty-checking of a domain
+object — it maps the domain result onto a fresh entity). Mutable POJOs were chosen over records to keep
+the mutation-style result-building and the test fixtures (`new Document(); doc.setX(...)`) simple; the
+enums `FileType`/`DocumentStatus` are top-level in `domain/model` and the JPA entities reference them
+directly, so the mapper needs no enum translation.
 
 ---
 
@@ -120,33 +130,36 @@ adapter writes** so the domain never relies on JPA dirty-checking.
 ### Inbound (driven by `web`)
 
 ```text
-AnalyzeDocumentUseCase
+DocumentAnalysisUseCase
   Document upload(UploadCommand cmd)        // store file + persist PENDING doc
   void     analyze(UUID documentId)         // run the full pipeline (synchronous, pure)
-
-ManageDocumentsUseCase
-  Optional<Document> getForOwner(UUID id, UUID ownerId)
-  List<Document>     listForOwner(UUID ownerId)
-  boolean            delete(UUID id, UUID ownerId)
+  boolean  delete(UUID id, UUID ownerId)
 ```
 
-`AnalyzeDocumentUseCase.analyze` is **synchronous** in the domain. The `@Async` hop lives in
-`web/AsyncAnalysisLauncher`, keeping `@Async`/threading out of the core.
+`DocumentAnalysisUseCase.analyze` is **synchronous** in the domain. The `@Async` hop lives in
+`web/AsyncAnalysisLauncher`, keeping `@Async`/threading out of the core. There is **no separate
+`ManageDocumentsUseCase`**: the read queries (`get`, `list`) and the stream-ownership check call
+`DocumentRepositoryPort` directly from the controller, which is a `web → domain` dependency and so is
+allowed (see §12).
 
-### Outbound (implemented by `persistence` / `integration` / `web`)
+### Outbound (implemented by `persistence` / `integration`; `ProgressNotifier` by `web`)
 
 ```text
 DocumentRepositoryPort        save, findById, findByIdAndOwner, findByIdAndOwnerWithResult,
-  (persistence, @Transactional) findAllByOwnerWithResults, updateStatus, completeAnalysis,
-                              failAnalysis, deleteAndReturnPath
-UserRepositoryPort            findByEmail, save           (persistence)
-StoragePort                   store, load(bytes), delete  (integration/storage)
-TextExtractorPort             String extract(Document)    (integration/extraction — PDFBox)
+  (persistence, @Transactional) findAllByOwnerWithResults, loadWithResult, updateStatus,
+                              completeAnalysis, failAnalysis, deleteAndReturnPath
+UserRepositoryPort            findByEmail, save                       (persistence)
+StoragePort                   store(InputStream, filename), readBytes, delete   (integration/storage)
+TextExtractorPort             String extractText(byte[] content, String contentType)
+  (integration/extraction — PDFBox; returns "" for non-PDF content)
 LlmPort                       analyzeText, analyzeTextChunk, mergePartialSummaries, analyzeImage
   (integration/llm)
-ProgressNotifier              void publish(UUID docId, AnalysisProgress)   (web/SseProgressNotifier)
-CurrentUserProvider           User getCurrentUser()       (web/WebCurrentUserProvider)
+ProgressNotifier              void publish(UUID docId, AnalysisProgress); void complete(UUID docId)
+  (web/SseProgressNotifier)
 ```
+
+`CurrentUserProvider` was **not** turned into a port: it stayed a concrete `web` component
+(`web/CurrentUserProvider`) that the controller calls and that uses `UserRepositoryPort`. See §12.
 
 **Transaction boundaries** stay coarse and live in the `persistence` adapter (mirroring today's
 `DocumentPersistenceService`): each intention-revealing write (`updateStatus`, `completeAnalysis`,
@@ -164,8 +177,8 @@ the notifier to register/return an emitter.
 
 | Current                              | Target                                                            | Notes |
 |--------------------------------------|-------------------------------------------------------------------|-------|
-| `controller/DocumentController`      | `web/DocumentController`                                           | depends on use-case ports, not services |
-| `controller` magic-byte validation  | `web/UploadValidator`                                             | extracted from controller |
+| `controller/DocumentController`      | `web/DocumentController`                                           | depends on the use-case port + `DocumentRepositoryPort` |
+| `controller` magic-byte validation  | _still inline in `web/DocumentController`_                        | **not** extracted to a `UploadValidator` (deferred — see §12) |
 | `dto/*`                              | `web/dto/*`                                                       | `DocumentDetailResponse`/`UploadResponse` reference domain enums, not entities |
 | `dto/AnalysisProgressEvent`          | `web/dto/AnalysisProgressEvent` (+ domain `AnalysisProgress`)     | wire DTO stays; core uses domain VO |
 | `service/DocumentAnalysisService`    | `domain/service/DocumentAnalysisService` + `web/AsyncAnalysisLauncher` | core logic pure; `@Async` hop in web |
@@ -174,13 +187,13 @@ the notifier to register/return an emitter.
 | `service/DocumentPersistenceService` | `persistence/DocumentRepositoryAdapter`                           | becomes the `DocumentRepositoryPort` impl, keeps `@Transactional` |
 | `service/StorageService`             | `integration/storage/FilesystemStorageAdapter` (impl `StoragePort`) | path-traversal guards preserved |
 | `service/LlmService`                 | `integration/llm/LlmClient` (impl `LlmPort`)                      | WebClient/Reactor confined here |
-| `service/CurrentUserProvider`        | `web/WebCurrentUserProvider` (impl `CurrentUserProvider` port)    | default-user bootstrap stays |
-| PDF text extraction (in analysis svc)| `integration/extraction/PdfBoxTextExtractor` (impl `TextExtractorPort`) | PDFBox confined here |
-| `entity/Document,AnalysisResult,User`| `persistence/entity/*Entity` **+** `domain/model/*`               | split: JPA entity ↔ plain model |
-| `repository/DocumentRepository`      | `persistence/repository/SpringDataDocumentRepository`             | named-query JPQL preserved |
-| `repository/UserRepository`          | `persistence/repository/SpringDataUserRepository`                 | |
-| `config/*`                           | `config/*` (unchanged) + new `BeanConfig` for wiring              | |
-| `GlobalExceptionHandler`             | `web/GlobalExceptionHandler`                                      | |
+| `service/CurrentUserProvider`        | `web/CurrentUserProvider` (concrete; uses `UserRepositoryPort`)   | default-user bootstrap stays; not made a port (§12) |
+| PDF text extraction (in analysis svc)| `integration/extraction/PdfBoxTextExtractor` (impl `TextExtractorPort`) | PDFBox confined here; takes `byte[]`+contentType |
+| `entity/Document,AnalysisResult,User`| `persistence/entity/*Entity` **+** `domain/model/*`               | split: JPA entity ↔ plain model; `@Entity(name=…)` keeps JPQL/schema stable |
+| `repository/DocumentRepository`      | `persistence/repository/DocumentJpaRepository`                    | named-query JPQL preserved |
+| `repository/UserRepository`          | `persistence/repository/UserJpaRepository`                        | |
+| `config/*`                           | `config/*` (unchanged) + new `DomainConfig` for wiring            | |
+| `config/GlobalExceptionHandler`      | `web/GlobalExceptionHandler` + new `web/UploadSizeExceptionHandler` | split to fix a latent ambiguous-mapping bug (§12) |
 
 ---
 
@@ -192,17 +205,18 @@ the notifier to register/return an emitter.
 - **SSE** → `web/SseProgressNotifier`.
 - **`@Value` config** (chunking thresholds, AI provider, storage dir, CORS) → injected into the
   **adapters/config**, then passed to domain via constructor params/POJO config objects. The domain
-  reads no `@Value`. Recommend a `ChunkingConfig` record built in `BeanConfig` and constructor-injected
+  reads no `@Value`. A `ChunkingConfig` record is built in `config/DomainConfig` and constructor-injected
   into `DocumentAnalysisService`.
 - **Jackson** → permitted in domain (`LlmResponseParser`), since it is a plain library, not a framework.
-- **Validation** → multipart/magic-byte checks in `web/UploadValidator`; "which file types are
-  supported" is a domain rule expressed via `FileType`.
+- **Validation** → multipart/magic-byte checks **remain inline in `web/DocumentController`**; extracting
+  them to a dedicated `UploadValidator` was deferred (see §12).
 
 ---
 
 ## 8. Enforcement (ArchUnit)
 
-Add `com.tngtech.archunit:archunit-junit5` (test scope) and a `LayeredArchitectureTest`:
+`com.tngtech.archunit:archunit-junit5` (test scope) backs `LayeredArchitectureTest`. The final,
+tightened rules (Phase 7) are:
 
 ```java
 layeredArchitecture().consideringOnlyDependenciesInLayers()
@@ -210,60 +224,107 @@ layeredArchitecture().consideringOnlyDependenciesInLayers()
   .layer("Domain").definedBy("..domain..")
   .layer("Persistence").definedBy("..persistence..")
   .layer("Integration").definedBy("..integration..")
+  // Domain is the only layer anything may depend on…
+  .whereLayer("Domain").mayOnlyBeAccessedByLayers("Web", "Persistence", "Integration")
+  // …and the inbound/outbound adapters are leaf layers: nothing in the
+  // hexagon depends on them (config wires them by port type via DI and is
+  // intentionally outside the layer set).
   .whereLayer("Web").mayNotBeAccessedByAnyLayer()
-  .whereLayer("Domain").mayOnlyBeAccessedByLayers("Web","Persistence","Integration")
-  .whereLayer("Persistence").mayOnlyBeAccessedByLayers("Web") // via config wiring only
-  ...
+  .whereLayer("Persistence").mayNotBeAccessedByAnyLayer()
+  .whereLayer("Integration").mayNotBeAccessedByAnyLayer();
 ```
 
 Plus a no-classes-in-`..domain..`-may-depend-on `org.springframework..`, `jakarta.persistence..`,
 `jakarta.servlet..`, `org.apache.pdfbox..`, `reactor..` rule. This is the executable contract for §3.
+During Phases 1–6 these rules used `withOptionalLayers(true)`/`allowEmptyShould(true)` so they passed
+while layers were still being populated; Phase 7 removed those escape hatches.
 
 ---
 
-## 9. Migration plan (incremental, test-green at every step)
+## 9. Phase log (as executed)
 
-Each phase compiles and keeps the existing test suite passing. Do them as separate commits.
+Each phase is one commit; the suite stayed green at every step, and the app was boot-verified against
+Postgres after Phases 3 and 4. Deviations from the original plan are called out.
 
-1. **Scaffold packages + ArchUnit test** (rule initially relaxed). Delete the stray brace-expansion dir.
-2. **Extract outbound adapters behind ports**, one at a time, re-pointing existing callers:
-   `StoragePort` → `StorageService` becomes `FilesystemStorageAdapter`; same for `LlmPort`,
-   `TextExtractorPort` (new), `DocumentRepositoryPort` (from `DocumentPersistenceService`),
-   `UserRepositoryPort`.
-3. **Introduce the domain model + `PersistenceMapper`**; adapters return/accept domain types. Wire DTOs
-   reference domain enums instead of `Document.FileType`.
-4. **Move analysis orchestration** into `domain/service`, injecting ports + `ChunkingConfig`. Extract
-   `TextChunker` and `LlmResponseParser`. Remove all framework imports from the orchestrator.
-5. **Relocate SSE + async** into `web` (`SseProgressNotifier`, `AsyncAnalysisLauncher`); domain emits via
-   `ProgressNotifier`.
-6. **Move web classes** (controller, DTOs, validator, exception handler, current-user) into `web`.
-7. **Tighten the ArchUnit rules** to the full §3 contract; fix any remaining violations.
-8. **Update tests** to match new package locations; add focused domain unit tests that mock ports
-   (the payoff — `DocumentAnalysisService` tested with zero Spring context).
+1. ✅ **Scaffold packages + ArchUnit contract** (`fa97a00`). `package-info.java` per package; ArchUnit
+   added with relaxed rules; stray brace-expansion dir removed; `.gitignore` adjusted so `domain.port.out`
+   isn't swallowed by the IDE `out/` rule.
+2. ✅ **Extract the three integration adapters behind ports** (`d79289d`): `StoragePort`,
+   `LlmPort`, `TextExtractorPort` (new). **Deviation:** the repository ports were **not** done here —
+   they were deferred to Phase 3 because they had to be typed against the domain model that Phase 3
+   introduces (doing them in Phase 2 would have meant writing entity-typed ports, then immediately
+   rewriting them).
+3. ✅ **Domain model + persistence adapters** (`595f39c`): plain model + `PersistenceMapper`; JPA
+   entities moved to `persistence/entity` as `*Entity` with `@Entity(name=…)`; `DocumentRepositoryPort`
+   /`UserRepositoryPort` + adapters (absorbing the old `DocumentPersistenceService`). **Boot-verified.**
+4. ✅ **Framework-free orchestration in `domain/service`** (`6f2e163`): pure `DocumentAnalysisService`
+   implementing `DocumentAnalysisUseCase`; `TextChunker`/`LlmResponseParser`/`ChunkingConfig` extracted;
+   `ProgressNotifier`/`AnalysisProgress` added. **Deviation:** the original **Phase 5 (relocate SSE +
+   async to `web`) was folded into this phase** — `SseProgressNotifier` and `AsyncAnalysisLauncher` were
+   created here, and wiring moved to `config/DomainConfig`. **Boot-verified.**
+5. — _(folded into Phase 4)._
+6. ✅ **Collapse legacy `controller`/`dto`/`service` into `web`** (`fb67b7b`). **Deviations:** the
+   `UploadValidator` extraction was **not** done (validation stays inline); `GlobalExceptionHandler` was
+   initially kept in `config` because moving it surfaced a latent bug (see next).
+   - **Bug fix** (`cc752fa`): `GlobalExceptionHandler.handlePayloadTooLarge(MaxUploadSizeExceededException)`
+     duplicated the mapping inherited from `ResponseEntityExceptionHandler`, an *ambiguous* mapping that
+     fails when the MVC advice cache is built. Split the 413 handler into a highest-precedence
+     `web/UploadSizeExceptionHandler`; both advices now live in `web`. Added `ExceptionHandlerAdviceTest`.
+7. ✅ **Tighten ArchUnit to the strict contract** (`395ef7e`): dropped the optional-layer/empty-should
+   escape hatches; adapters + web asserted as leaf layers (see §8). Passed unchanged — no stray
+   `web → persistence/integration` or cross-adapter dependencies existed.
+8. ✅ **Tests + this document.** Domain unit tests run with mocked ports and **zero Spring context**
+   (`DocumentAnalysisServiceTest`, `TextChunkerTest`); SSE behaviour covered by `SseProgressNotifierTest`.
+   This spec reconciled to as-built.
 
 ---
 
 ## 10. Risks & open questions
 
-- **Domain model duplication.** Splitting JPA entities from domain records adds a mapper. This is the
+- **Domain model duplication.** Splitting JPA entities from the domain model adds a mapper. This is the
   cost of a framework-free domain; the `PersistenceMapper` is the only place that knows both shapes.
-- **Lazy loading.** Today `loadWithResult` relies on `LEFT JOIN FETCH`; the mapper must materialize the
-  `AnalysisResult` inside the transaction before returning a detached domain object — confirm no lazy
-  access leaks past the adapter.
+- **Lazy loading** — _handled._ The adapter's read methods are `@Transactional` and map inside the
+  transaction; `findByIdAndOwnerWithResult`/`findAllByOwnerWithResults` use `LEFT JOIN FETCH` and map via
+  `toDomainWithResult`. The mapper maps `owner` **id-only** (`getId()` on a lazy proxy doesn't initialize
+  it), so read paths never trip `LazyInitializationException`. Boot-verified with the real DB.
 - **`@CreationTimestamp`/`@UpdateTimestamp`** live on the JPA entity; domain timestamps are read-only
-  copies set by the DB. Domain must not try to author `updatedAt`.
-- **Open:** do we want a separate `application/` layer for use-case implementations, or keep them in
-  `domain/service`? This spec keeps them in `domain/service` for simplicity; revisit if orchestration
-  grows transaction-script-heavy.
+  copies. The domain never authors `updatedAt`.
+- **Resolved:** use-case implementations live in `domain/service` (no separate `application/` layer);
+  revisit if orchestration grows transaction-script-heavy.
 
 ---
 
 ## 11. Acceptance criteria
 
-- [ ] All existing tests pass unchanged in behavior; HTTP contract and DB schema untouched.
-- [ ] `..domain..` has zero imports of Spring, JPA, Servlet, PDFBox, or Reactor (ArchUnit-verified).
-- [ ] Every external system (DB, LLM, filesystem, PDF extraction, SSE) is reached only through a port.
-- [ ] `DocumentAnalysisService` has at least one unit test that runs with mocked ports and **no Spring
-      context**.
-- [ ] The stray `{controller,...}` directory is removed.
+- [x] All existing tests pass; HTTP contract and DB schema untouched (Flyway validates 3 migrations,
+      Hibernate `ddl-auto: validate` passes on boot).
+- [x] `..domain..` has zero imports of Spring, JPA, Servlet, PDFBox, or Reactor (ArchUnit-verified,
+      non-vacuously).
+- [x] Every external system (DB, LLM, filesystem, PDF extraction, SSE) is reached only through a port.
+- [x] `DocumentAnalysisService` runs in unit tests with mocked ports and **no Spring context**.
+- [x] The stray `{controller,...}` directory is removed.
+- [x] _(beyond plan)_ The app boots against Postgres; a latent ambiguous-`@ExceptionHandler` bug was
+      found and fixed with a regression test.
+
+---
+
+## 12. As-built deviations from the proposal
+
+- **Repository ports landed in Phase 3, not Phase 2** — they had to speak the domain model introduced in
+  Phase 3 (see §9).
+- **Phase 5 was folded into Phase 4** — SSE + async relocation happened together with the orchestration
+  move.
+- **No `UploadValidator`** — multipart/magic-byte validation stayed inline in `DocumentController`. A
+  clean follow-up, but it doesn't affect the dependency rule.
+- **No `CurrentUserProvider` port** — it stayed a concrete `web` component using `UserRepositoryPort`.
+  Since the controller and the provider are both in `web`, no port was needed to keep the dependency rule
+  intact; one can be introduced when real auth (SecurityContext) lands.
+- **No `ManageDocumentsUseCase`** — read queries (`get`/`list`) and the stream-ownership check call
+  `DocumentRepositoryPort` directly from the controller. That is a `web → domain` (port) dependency,
+  which the rule allows; a dedicated query use case was not worth the indirection yet.
+- **Domain model is mutable POJOs**, not immutable records (see §4).
+- **`GlobalExceptionHandler` split + bug fix** — moving it to `web` surfaced a real latent
+  ambiguous-mapping crash; the 413 handler was split into `web/UploadSizeExceptionHandler` (highest
+  precedence) and a regression test was added (see §9, Phase 6).
+- **`config/DomainConfig`** is the composition root (the proposal called it `BeanConfig`).
 ```
