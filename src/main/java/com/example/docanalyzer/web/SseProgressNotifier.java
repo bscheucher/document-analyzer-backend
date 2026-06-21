@@ -3,7 +3,7 @@ package com.example.docanalyzer.web;
 import com.example.docanalyzer.domain.model.AnalysisProgress;
 import com.example.docanalyzer.domain.model.DocumentStatus;
 import com.example.docanalyzer.domain.port.out.ProgressNotifier;
-import com.example.docanalyzer.dto.AnalysisProgressEvent;
+import com.example.docanalyzer.web.dto.AnalysisProgressEvent;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;

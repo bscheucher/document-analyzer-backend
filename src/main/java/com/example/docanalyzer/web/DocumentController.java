@@ -1,4 +1,4 @@
-package com.example.docanalyzer.controller;
+package com.example.docanalyzer.web;
 
 import com.example.docanalyzer.domain.model.AnalysisResult;
 import com.example.docanalyzer.domain.model.Document;
@@ -6,12 +6,9 @@ import com.example.docanalyzer.domain.model.User;
 import com.example.docanalyzer.domain.port.in.DocumentAnalysisUseCase;
 import com.example.docanalyzer.domain.port.in.UploadCommand;
 import com.example.docanalyzer.domain.port.out.DocumentRepositoryPort;
-import com.example.docanalyzer.dto.AnalysisResultDto;
-import com.example.docanalyzer.dto.DocumentDetailResponse;
-import com.example.docanalyzer.dto.DocumentUploadResponse;
-import com.example.docanalyzer.service.CurrentUserProvider;
-import com.example.docanalyzer.web.AsyncAnalysisLauncher;
-import com.example.docanalyzer.web.SseProgressNotifier;
+import com.example.docanalyzer.web.dto.AnalysisResultDto;
+import com.example.docanalyzer.web.dto.DocumentDetailResponse;
+import com.example.docanalyzer.web.dto.DocumentUploadResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;

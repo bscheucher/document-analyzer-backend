@@ -1,4 +1,4 @@
-package com.example.docanalyzer.dto;
+package com.example.docanalyzer.web.dto;
 
 import com.example.docanalyzer.domain.model.DocumentStatus;
 import com.example.docanalyzer.domain.model.FileType;
@@ -6,11 +6,12 @@ import com.example.docanalyzer.domain.model.FileType;
 import java.time.Instant;
 import java.util.UUID;
 
-public record DocumentUploadResponse(
+public record DocumentDetailResponse(
         UUID id,
         String filename,
         FileType fileType,
         Long fileSize,
         DocumentStatus status,
-        Instant createdAt
+        Instant createdAt,
+        AnalysisResultDto analysisResult
 ) {}

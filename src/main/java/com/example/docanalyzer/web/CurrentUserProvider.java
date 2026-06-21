@@ -1,4 +1,4 @@
-package com.example.docanalyzer.service;
+package com.example.docanalyzer.web;
 
 import com.example.docanalyzer.domain.model.User;
 import com.example.docanalyzer.domain.port.out.UserRepositoryPort;

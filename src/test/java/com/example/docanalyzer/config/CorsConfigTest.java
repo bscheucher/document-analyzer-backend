@@ -1,10 +1,10 @@
 package com.example.docanalyzer.config;
 
-import com.example.docanalyzer.controller.DocumentController;
 import com.example.docanalyzer.domain.port.in.DocumentAnalysisUseCase;
 import com.example.docanalyzer.domain.port.out.DocumentRepositoryPort;
-import com.example.docanalyzer.service.CurrentUserProvider;
 import com.example.docanalyzer.web.AsyncAnalysisLauncher;
+import com.example.docanalyzer.web.CurrentUserProvider;
+import com.example.docanalyzer.web.DocumentController;
 import com.example.docanalyzer.web.SseProgressNotifier;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;

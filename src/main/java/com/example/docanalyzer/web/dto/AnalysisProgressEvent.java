@@ -1,4 +1,4 @@
-package com.example.docanalyzer.dto;
+package com.example.docanalyzer.web.dto;
 
 public record AnalysisProgressEvent(
         String stage,        // "EXTRACTING" | "ANALYZING" | "DONE" | "FAILED"

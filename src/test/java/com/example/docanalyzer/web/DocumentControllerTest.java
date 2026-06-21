@@ -1,4 +1,4 @@
-package com.example.docanalyzer.controller;
+package com.example.docanalyzer.web;
 
 import com.example.docanalyzer.domain.model.Document;
 import com.example.docanalyzer.domain.model.DocumentStatus;
@@ -7,9 +7,6 @@ import com.example.docanalyzer.domain.model.User;
 import com.example.docanalyzer.domain.port.in.DocumentAnalysisUseCase;
 import com.example.docanalyzer.domain.port.in.UploadCommand;
 import com.example.docanalyzer.domain.port.out.DocumentRepositoryPort;
-import com.example.docanalyzer.service.CurrentUserProvider;
-import com.example.docanalyzer.web.AsyncAnalysisLauncher;
-import com.example.docanalyzer.web.SseProgressNotifier;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
