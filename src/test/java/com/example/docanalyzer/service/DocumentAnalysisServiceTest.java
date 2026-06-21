@@ -1,12 +1,14 @@
 package com.example.docanalyzer.service;
 
+import com.example.docanalyzer.domain.model.AnalysisResult;
+import com.example.docanalyzer.domain.model.Document;
+import com.example.docanalyzer.domain.model.DocumentStatus;
+import com.example.docanalyzer.domain.model.FileType;
+import com.example.docanalyzer.domain.model.User;
+import com.example.docanalyzer.domain.port.out.DocumentRepositoryPort;
 import com.example.docanalyzer.domain.port.out.LlmPort;
 import com.example.docanalyzer.domain.port.out.StoragePort;
 import com.example.docanalyzer.domain.port.out.TextExtractorPort;
-import com.example.docanalyzer.entity.AnalysisResult;
-import com.example.docanalyzer.entity.Document;
-import com.example.docanalyzer.entity.User;
-import com.example.docanalyzer.repository.DocumentRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -34,8 +36,7 @@ import static org.mockito.Mockito.*;
 @ExtendWith(MockitoExtension.class)
 class DocumentAnalysisServiceTest {
 
-    @Mock DocumentRepository documentRepository;
-    @Mock DocumentPersistenceService persistence;
+    @Mock DocumentRepositoryPort documentRepository;
     @Mock StoragePort storageService;
     @Mock LlmPort llmService;
     @Mock TextExtractorPort textExtractor;
@@ -49,7 +50,7 @@ class DocumentAnalysisServiceTest {
         owner.setId(UUID.randomUUID());
         owner.setEmail("test@example.com");
         service = new DocumentAnalysisService(
-                documentRepository, persistence, storageService, llmService, textExtractor, new ObjectMapper()
+                documentRepository, storageService, llmService, textExtractor, new ObjectMapper()
         );
         // @Value-injected fields aren't set by the no-Spring constructor — pick
         // small values so the chunking tests can exercise the path with tiny
@@ -73,9 +74,9 @@ class DocumentAnalysisServiceTest {
 
         Document doc = service.upload(file, owner);
 
-        assertThat(doc.getFileType()).isEqualTo(Document.FileType.PDF);
+        assertThat(doc.getFileType()).isEqualTo(FileType.PDF);
         assertThat(doc.getFilename()).isEqualTo("test.pdf");
-        assertThat(doc.getStatus()).isEqualTo(Document.DocumentStatus.PENDING);
+        assertThat(doc.getStatus()).isEqualTo(DocumentStatus.PENDING);
         assertThat(doc.getOwner()).isSameAs(owner);
         verify(documentRepository).save(any(Document.class));
     }
@@ -91,14 +92,14 @@ class DocumentAnalysisServiceTest {
 
         Document doc = service.upload(file, owner);
 
-        assertThat(doc.getFileType()).isEqualTo(Document.FileType.IMAGE);
+        assertThat(doc.getFileType()).isEqualTo(FileType.IMAGE);
     }
 
     @Test
     void subscribe_returnsEmitter_forKnownDocument() {
         UUID id = UUID.randomUUID();
         Document doc = new Document();
-        doc.setStatus(Document.DocumentStatus.PENDING);
+        doc.setStatus(DocumentStatus.PENDING);
 
         when(documentRepository.findById(id)).thenReturn(Optional.of(doc));
 
@@ -111,7 +112,7 @@ class DocumentAnalysisServiceTest {
     void subscribe_reconnect_completesPriorEmitter() {
         UUID id = UUID.randomUUID();
         Document doc = new Document();
-        doc.setStatus(Document.DocumentStatus.PENDING);
+        doc.setStatus(DocumentStatus.PENDING);
         when(documentRepository.findById(id)).thenReturn(Optional.of(doc));
 
         var first = service.subscribe(id);
@@ -131,7 +132,7 @@ class DocumentAnalysisServiceTest {
         UUID id = UUID.randomUUID();
         Document doc = imageDoc(id, "image/png");
 
-        when(persistence.loadWithResult(id)).thenReturn(doc);
+        when(documentRepository.loadWithResult(id)).thenReturn(doc);
         when(storageService.readBytes("scan.bin")).thenReturn(new byte[]{1, 2, 3});
         when(llmService.analyzeImage(any(), eq("image/png"))).thenReturn("""
                 {"documentType":"Invoice","summary":"Q1 invoice","keyTopics":["billing","Q1"]}
@@ -139,16 +140,16 @@ class DocumentAnalysisServiceTest {
 
         service.analyzeAsync(id);
 
-        verify(persistence).updateStatus(id, Document.DocumentStatus.EXTRACTING);
-        verify(persistence).updateStatus(id, Document.DocumentStatus.ANALYZING);
+        verify(documentRepository).updateStatus(id, DocumentStatus.EXTRACTING);
+        verify(documentRepository).updateStatus(id, DocumentStatus.ANALYZING);
 
         ArgumentCaptor<AnalysisResult> captor = ArgumentCaptor.forClass(AnalysisResult.class);
-        verify(persistence).completeAnalysis(eq(id), captor.capture());
+        verify(documentRepository).completeAnalysis(eq(id), captor.capture());
         AnalysisResult result = captor.getValue();
         assertThat(result.getDocumentType()).isEqualTo("Invoice");
         assertThat(result.getSummary()).isEqualTo("Q1 invoice");
         assertThat(result.getKeyTopics()).containsExactly("billing", "Q1");
-        verify(persistence, never()).failAnalysis(any(), any(), any());
+        verify(documentRepository, never()).failAnalysis(any(), any(), any());
     }
 
     @Test
@@ -156,7 +157,7 @@ class DocumentAnalysisServiceTest {
         UUID id = UUID.randomUUID();
         Document doc = imageDoc(id, null);
 
-        when(persistence.loadWithResult(id)).thenReturn(doc);
+        when(documentRepository.loadWithResult(id)).thenReturn(doc);
         when(storageService.readBytes(any())).thenReturn(new byte[]{1});
         when(llmService.analyzeImage(any(), eq("image/jpeg")))
                 .thenReturn("{\"documentType\":\"X\",\"summary\":\"y\",\"keyTopics\":[]}");
@@ -171,15 +172,15 @@ class DocumentAnalysisServiceTest {
         UUID id = UUID.randomUUID();
         Document doc = imageDoc(id, "image/png");
 
-        when(persistence.loadWithResult(id)).thenReturn(doc);
+        when(documentRepository.loadWithResult(id)).thenReturn(doc);
         when(storageService.readBytes(any())).thenReturn(new byte[]{0});
         when(llmService.analyzeImage(any(), any()))
                 .thenThrow(new RuntimeException("Ollama unreachable"));
 
         service.analyzeAsync(id);
 
-        verify(persistence).failAnalysis(eq(id), any(AnalysisResult.class), eq("Ollama unreachable"));
-        verify(persistence, never()).completeAnalysis(any(), any());
+        verify(documentRepository).failAnalysis(eq(id), any(AnalysisResult.class), eq("Ollama unreachable"));
+        verify(documentRepository, never()).completeAnalysis(any(), any());
     }
 
     @Test
@@ -187,7 +188,7 @@ class DocumentAnalysisServiceTest {
         UUID id = UUID.randomUUID();
         Document doc = imageDoc(id, "image/png");
 
-        when(persistence.loadWithResult(id)).thenReturn(doc);
+        when(documentRepository.loadWithResult(id)).thenReturn(doc);
         when(storageService.readBytes(any())).thenReturn(new byte[]{0});
         when(llmService.analyzeImage(any(), any())).thenReturn(
                 "Here's the analysis:\n```json\n" +
@@ -197,7 +198,7 @@ class DocumentAnalysisServiceTest {
         service.analyzeAsync(id);
 
         ArgumentCaptor<AnalysisResult> captor = ArgumentCaptor.forClass(AnalysisResult.class);
-        verify(persistence).completeAnalysis(eq(id), captor.capture());
+        verify(documentRepository).completeAnalysis(eq(id), captor.capture());
         assertThat(captor.getValue().getDocumentType()).isEqualTo("Letter");
         assertThat(captor.getValue().getKeyTopics()).containsExactly("a");
     }
@@ -207,7 +208,7 @@ class DocumentAnalysisServiceTest {
         UUID id = UUID.randomUUID();
         Document doc = imageDoc(id, "image/png");
 
-        when(persistence.loadWithResult(id)).thenReturn(doc);
+        when(documentRepository.loadWithResult(id)).thenReturn(doc);
         when(storageService.readBytes(any())).thenReturn(new byte[]{0});
         // First {...} is an example structure with no expected fields; the
         // real analysis follows. The old indexOf/lastIndexOf slicer would
@@ -219,7 +220,7 @@ class DocumentAnalysisServiceTest {
         service.analyzeAsync(id);
 
         ArgumentCaptor<AnalysisResult> captor = ArgumentCaptor.forClass(AnalysisResult.class);
-        verify(persistence).completeAnalysis(eq(id), captor.capture());
+        verify(documentRepository).completeAnalysis(eq(id), captor.capture());
         assertThat(captor.getValue().getDocumentType()).isEqualTo("Invoice");
         assertThat(captor.getValue().getSummary()).isEqualTo("Real");
         assertThat(captor.getValue().getKeyTopics()).containsExactly("x");
@@ -230,7 +231,7 @@ class DocumentAnalysisServiceTest {
         UUID id = UUID.randomUUID();
         Document doc = imageDoc(id, "image/png");
 
-        when(persistence.loadWithResult(id)).thenReturn(doc);
+        when(documentRepository.loadWithResult(id)).thenReturn(doc);
         when(storageService.readBytes(any())).thenReturn(new byte[]{0});
         when(llmService.analyzeImage(any(), any())).thenReturn(
                 "{\"documentType\":\"Letter\"," +
@@ -240,7 +241,7 @@ class DocumentAnalysisServiceTest {
         service.analyzeAsync(id);
 
         ArgumentCaptor<AnalysisResult> captor = ArgumentCaptor.forClass(AnalysisResult.class);
-        verify(persistence).completeAnalysis(eq(id), captor.capture());
+        verify(documentRepository).completeAnalysis(eq(id), captor.capture());
         assertThat(captor.getValue().getSummary())
                 .isEqualTo("Body mentions a } char and \"quotes\".");
         assertThat(captor.getValue().getDocumentType()).isEqualTo("Letter");
@@ -251,14 +252,14 @@ class DocumentAnalysisServiceTest {
         UUID id = UUID.randomUUID();
         Document doc = imageDoc(id, "image/png");
 
-        when(persistence.loadWithResult(id)).thenReturn(doc);
+        when(documentRepository.loadWithResult(id)).thenReturn(doc);
         when(storageService.readBytes(any())).thenReturn(new byte[]{0});
         when(llmService.analyzeImage(any(), any())).thenReturn("Sorry, I cannot analyze this.");
 
         service.analyzeAsync(id);
 
         ArgumentCaptor<AnalysisResult> captor = ArgumentCaptor.forClass(AnalysisResult.class);
-        verify(persistence).completeAnalysis(eq(id), captor.capture());
+        verify(documentRepository).completeAnalysis(eq(id), captor.capture());
         AnalysisResult result = captor.getValue();
         assertThat(result.getSummary()).isEqualTo("Sorry, I cannot analyze this.");
         assertThat(result.getDocumentType()).isNull();
@@ -348,10 +349,10 @@ class DocumentAnalysisServiceTest {
     private static Document imageDoc(UUID id, String contentType) {
         Document doc = new Document();
         doc.setId(id);
-        doc.setFileType(Document.FileType.IMAGE);
+        doc.setFileType(FileType.IMAGE);
         doc.setStoragePath("scan.bin");
         doc.setContentType(contentType);
-        doc.setStatus(Document.DocumentStatus.PENDING);
+        doc.setStatus(DocumentStatus.PENDING);
         return doc;
     }
 }

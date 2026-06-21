@@ -1,12 +1,11 @@
 package com.example.docanalyzer.service;
 
-import com.example.docanalyzer.entity.User;
-import com.example.docanalyzer.repository.UserRepository;
+import com.example.docanalyzer.domain.model.User;
+import com.example.docanalyzer.domain.port.out.UserRepositoryPort;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Resolves the user that owns the current request.
@@ -21,18 +20,17 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class CurrentUserProvider {
 
-    private final UserRepository userRepository;
+    private final UserRepositoryPort userRepository;
     private final String defaultUserEmail;
 
     public CurrentUserProvider(
-            UserRepository userRepository,
+            UserRepositoryPort userRepository,
             @Value("${app.auth.default-user-email}") String defaultUserEmail) {
         this.userRepository = userRepository;
         this.defaultUserEmail = defaultUserEmail;
     }
 
     @PostConstruct
-    @Transactional
     void ensureDefaultUserExists() {
         if (userRepository.findByEmail(defaultUserEmail).isEmpty()) {
             User user = new User();

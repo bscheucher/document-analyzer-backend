@@ -1,5 +1,7 @@
-package com.example.docanalyzer.entity;
+package com.example.docanalyzer.persistence.entity;
 
+import com.example.docanalyzer.domain.model.DocumentStatus;
+import com.example.docanalyzer.domain.model.FileType;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
@@ -8,11 +10,14 @@ import org.hibernate.annotations.UpdateTimestamp;
 import java.time.Instant;
 import java.util.UUID;
 
-@Entity
+// @Entity(name = "Document") keeps the JPQL entity name stable so the existing
+// repository queries ("SELECT d FROM Document d ...") and DB schema are
+// untouched by the move out of the legacy entity package.
+@Entity(name = "Document")
 @Table(name = "documents")
 @Getter
 @Setter
-public class Document {
+public class DocumentEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
@@ -20,7 +25,7 @@ public class Document {
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "owner_id", nullable = false)
-    private User owner;
+    private UserEntity owner;
 
     @Column(nullable = false)
     private String filename;
@@ -50,13 +55,5 @@ public class Document {
     private Instant updatedAt;
 
     @OneToOne(mappedBy = "document", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
-    private AnalysisResult analysisResult;
-
-    public enum FileType {
-        PDF, IMAGE
-    }
-
-    public enum DocumentStatus {
-        PENDING, EXTRACTING, ANALYZING, DONE, FAILED
-    }
+    private AnalysisResultEntity analysisResult;
 }

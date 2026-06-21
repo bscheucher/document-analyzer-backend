@@ -1,13 +1,15 @@
 package com.example.docanalyzer.service;
 
+import com.example.docanalyzer.domain.model.AnalysisResult;
+import com.example.docanalyzer.domain.model.Document;
+import com.example.docanalyzer.domain.model.DocumentStatus;
+import com.example.docanalyzer.domain.model.FileType;
+import com.example.docanalyzer.domain.model.User;
+import com.example.docanalyzer.domain.port.out.DocumentRepositoryPort;
 import com.example.docanalyzer.domain.port.out.LlmPort;
 import com.example.docanalyzer.domain.port.out.StoragePort;
 import com.example.docanalyzer.domain.port.out.TextExtractorPort;
 import com.example.docanalyzer.dto.AnalysisProgressEvent;
-import com.example.docanalyzer.entity.AnalysisResult;
-import com.example.docanalyzer.entity.Document;
-import com.example.docanalyzer.entity.User;
-import com.example.docanalyzer.repository.DocumentRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -30,8 +32,7 @@ import java.util.concurrent.ConcurrentHashMap;
 @RequiredArgsConstructor
 public class DocumentAnalysisService {
 
-    private final DocumentRepository documentRepository;
-    private final DocumentPersistenceService persistence;
+    private final DocumentRepositoryPort documentRepository;
     private final StoragePort storageService;
     private final LlmPort llmService;
     private final TextExtractorPort textExtractor;
@@ -56,7 +57,7 @@ public class DocumentAnalysisService {
         try (InputStream is = file.getInputStream()) {
             storagePath = storageService.store(is, file.getOriginalFilename());
         }
-        Document.FileType fileType = detectFileType(file.getContentType());
+        FileType fileType = detectFileType(file.getContentType());
 
         Document doc = new Document();
         doc.setOwner(owner);
@@ -65,7 +66,7 @@ public class DocumentAnalysisService {
         doc.setFileSize(file.getSize());
         doc.setStoragePath(storagePath);
         doc.setContentType(file.getContentType());
-        doc.setStatus(Document.DocumentStatus.PENDING);
+        doc.setStatus(DocumentStatus.PENDING);
 
         return documentRepository.save(doc);
     }
@@ -73,7 +74,7 @@ public class DocumentAnalysisService {
     // ── Delete ───────────────────────────────────────────────────────────────
 
     public boolean delete(UUID documentId, User owner) {
-        String storagePath = persistence.deleteAndReturnPath(documentId, owner.getId());
+        String storagePath = documentRepository.deleteAndReturnPath(documentId, owner.getId());
         if (storagePath == null) return false;
 
         try {
@@ -111,8 +112,8 @@ public class DocumentAnalysisService {
         // controller looked up the doc via findByIdAndOwnerWithResult before
         // calling subscribe), so an unscoped findById is correct here.
         documentRepository.findById(documentId).ifPresent(doc -> {
-            if (doc.getStatus() == Document.DocumentStatus.DONE
-                    || doc.getStatus() == Document.DocumentStatus.FAILED) {
+            if (doc.getStatus() == DocumentStatus.DONE
+                    || doc.getStatus() == DocumentStatus.FAILED) {
                 sendEvent(documentId, new AnalysisProgressEvent(
                         doc.getStatus().name(), "Analysis already complete", 100));
                 emitter.complete();
@@ -126,24 +127,24 @@ public class DocumentAnalysisService {
 
     @Async("analysisExecutor")
     public void analyzeAsync(UUID documentId) {
-        Document doc = persistence.loadWithResult(documentId);
+        Document doc = documentRepository.loadWithResult(documentId);
         AnalysisResult result = new AnalysisResult();
 
         try {
             sendEvent(documentId, new AnalysisProgressEvent("EXTRACTING", "Extracting text...", 10));
-            persistence.updateStatus(documentId, Document.DocumentStatus.EXTRACTING);
+            documentRepository.updateStatus(documentId, DocumentStatus.EXTRACTING);
 
             String extractedText = extractText(doc);
             result.setExtractedText(extractedText);
             sendEvent(documentId, new AnalysisProgressEvent("EXTRACTING",
-                    doc.getFileType() == Document.FileType.PDF
+                    doc.getFileType() == FileType.PDF
                             ? "Text extracted successfully."
                             : "Image ready for vision model.", 30));
 
             sendEvent(documentId, new AnalysisProgressEvent("ANALYZING", "Sending to AI model...", 50));
-            persistence.updateStatus(documentId, Document.DocumentStatus.ANALYZING);
+            documentRepository.updateStatus(documentId, DocumentStatus.ANALYZING);
 
-            String llmResponse = doc.getFileType() == Document.FileType.IMAGE
+            String llmResponse = doc.getFileType() == FileType.IMAGE
                     ? llmService.analyzeImage(
                             storageService.readBytes(doc.getStoragePath()),
                             doc.getContentType() != null ? doc.getContentType() : "image/jpeg")
@@ -152,12 +153,12 @@ public class DocumentAnalysisService {
             result.setRawLlmResponse(llmResponse);
             parseAndApplyLlmResponse(llmResponse, result);
 
-            persistence.completeAnalysis(documentId, result);
+            documentRepository.completeAnalysis(documentId, result);
             sendEvent(documentId, new AnalysisProgressEvent("DONE", "Analysis complete!", 100));
 
         } catch (Exception e) {
             log.error("Analysis failed for document {}", documentId, e);
-            persistence.failAnalysis(documentId, result, e.getMessage());
+            documentRepository.failAnalysis(documentId, result, e.getMessage());
             sendEvent(documentId, new AnalysisProgressEvent("FAILED", "Analysis failed: " + e.getMessage(), 100));
         } finally {
             SseEmitter emitter = emitters.remove(documentId);
@@ -168,7 +169,7 @@ public class DocumentAnalysisService {
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private String extractText(Document doc) throws IOException {
-        if (doc.getFileType() == Document.FileType.PDF) {
+        if (doc.getFileType() == FileType.PDF) {
             byte[] content = storageService.readBytes(doc.getStoragePath());
             return textExtractor.extractText(content, doc.getContentType());
         }
@@ -313,10 +314,10 @@ public class DocumentAnalysisService {
         }
     }
 
-    private Document.FileType detectFileType(String contentType) {
-        if (contentType == null) return Document.FileType.IMAGE;
+    private FileType detectFileType(String contentType) {
+        if (contentType == null) return FileType.IMAGE;
         return contentType.equalsIgnoreCase("application/pdf")
-                ? Document.FileType.PDF
-                : Document.FileType.IMAGE;
+                ? FileType.PDF
+                : FileType.IMAGE;
     }
 }

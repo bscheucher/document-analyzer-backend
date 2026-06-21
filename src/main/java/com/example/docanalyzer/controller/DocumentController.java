@@ -1,12 +1,12 @@
 package com.example.docanalyzer.controller;
 
+import com.example.docanalyzer.domain.model.AnalysisResult;
+import com.example.docanalyzer.domain.model.Document;
+import com.example.docanalyzer.domain.model.User;
+import com.example.docanalyzer.domain.port.out.DocumentRepositoryPort;
 import com.example.docanalyzer.dto.AnalysisResultDto;
 import com.example.docanalyzer.dto.DocumentDetailResponse;
 import com.example.docanalyzer.dto.DocumentUploadResponse;
-import com.example.docanalyzer.entity.AnalysisResult;
-import com.example.docanalyzer.entity.Document;
-import com.example.docanalyzer.entity.User;
-import com.example.docanalyzer.repository.DocumentRepository;
 import com.example.docanalyzer.service.CurrentUserProvider;
 import com.example.docanalyzer.service.DocumentAnalysisService;
 import lombok.RequiredArgsConstructor;
@@ -27,7 +27,7 @@ import java.util.UUID;
 public class DocumentController {
 
     private final DocumentAnalysisService analysisService;
-    private final DocumentRepository documentRepository;
+    private final DocumentRepositoryPort documentRepository;
     private final CurrentUserProvider currentUserProvider;
 
     /**

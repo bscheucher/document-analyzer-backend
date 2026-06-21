@@ -1,7 +1,7 @@
 package com.example.docanalyzer.config;
 
 import com.example.docanalyzer.controller.DocumentController;
-import com.example.docanalyzer.repository.DocumentRepository;
+import com.example.docanalyzer.domain.port.out.DocumentRepositoryPort;
 import com.example.docanalyzer.service.CurrentUserProvider;
 import com.example.docanalyzer.service.DocumentAnalysisService;
 import org.junit.jupiter.api.Test;
@@ -23,7 +23,7 @@ class CorsConfigTest {
 
     @Autowired MockMvc mockMvc;
     @MockBean DocumentAnalysisService analysisService;
-    @MockBean DocumentRepository documentRepository;
+    @MockBean DocumentRepositoryPort documentRepository;
     @MockBean CurrentUserProvider currentUserProvider;
 
     @Test

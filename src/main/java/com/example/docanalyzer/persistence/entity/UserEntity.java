@@ -1,4 +1,4 @@
-package com.example.docanalyzer.entity;
+package com.example.docanalyzer.persistence.entity;
 
 import jakarta.persistence.*;
 import lombok.Getter;
@@ -7,11 +7,11 @@ import lombok.Setter;
 import java.time.Instant;
 import java.util.UUID;
 
-@Entity
+@Entity(name = "User")
 @Table(name = "users")
 @Getter
 @Setter
-public class User {
+public class UserEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)

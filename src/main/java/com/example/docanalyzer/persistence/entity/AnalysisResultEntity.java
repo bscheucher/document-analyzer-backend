@@ -1,4 +1,4 @@
-package com.example.docanalyzer.entity;
+package com.example.docanalyzer.persistence.entity;
 
 import jakarta.persistence.*;
 import lombok.Getter;
@@ -11,11 +11,11 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
-@Entity
+@Entity(name = "AnalysisResult")
 @Table(name = "analysis_results")
 @Getter
 @Setter
-public class AnalysisResult {
+public class AnalysisResultEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
@@ -23,7 +23,7 @@ public class AnalysisResult {
 
     @OneToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "document_id", nullable = false)
-    private Document document;
+    private DocumentEntity document;
 
     @Column(columnDefinition = "TEXT")
     private String summary;

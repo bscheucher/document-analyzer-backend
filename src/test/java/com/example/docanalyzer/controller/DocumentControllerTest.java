@@ -1,8 +1,10 @@
 package com.example.docanalyzer.controller;
 
-import com.example.docanalyzer.entity.Document;
-import com.example.docanalyzer.entity.User;
-import com.example.docanalyzer.repository.DocumentRepository;
+import com.example.docanalyzer.domain.model.Document;
+import com.example.docanalyzer.domain.model.DocumentStatus;
+import com.example.docanalyzer.domain.model.FileType;
+import com.example.docanalyzer.domain.model.User;
+import com.example.docanalyzer.domain.port.out.DocumentRepositoryPort;
 import com.example.docanalyzer.service.CurrentUserProvider;
 import com.example.docanalyzer.service.DocumentAnalysisService;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,7 +29,7 @@ import static org.mockito.Mockito.when;
 class DocumentControllerTest {
 
     @Mock DocumentAnalysisService analysisService;
-    @Mock DocumentRepository documentRepository;
+    @Mock DocumentRepositoryPort documentRepository;
     @Mock CurrentUserProvider currentUserProvider;
 
     DocumentController controller;
@@ -247,9 +249,9 @@ class DocumentControllerTest {
         Document doc = new Document();
         doc.setId(UUID.randomUUID());
         doc.setFilename("any");
-        doc.setFileType(Document.FileType.PDF);
+        doc.setFileType(FileType.PDF);
         doc.setFileSize(100L);
-        doc.setStatus(Document.DocumentStatus.PENDING);
+        doc.setStatus(DocumentStatus.PENDING);
         doc.setCreatedAt(Instant.now());
         return doc;
     }
