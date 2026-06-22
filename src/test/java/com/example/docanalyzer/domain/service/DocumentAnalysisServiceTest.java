@@ -92,7 +92,7 @@ class DocumentAnalysisServiceTest {
         UUID id = UUID.randomUUID();
         Document doc = imageDoc(id, "image/png");
 
-        when(documentRepository.loadWithResult(id)).thenReturn(doc);
+        when(documentRepository.load(id)).thenReturn(doc);
         when(storageService.readBytes("scan.bin")).thenReturn(new byte[]{1, 2, 3});
         when(llmService.analyzeImage(any(), eq("image/png"))).thenReturn("""
                 {"documentType":"Invoice","summary":"Q1 invoice","keyTopics":["billing","Q1"]}
@@ -118,7 +118,7 @@ class DocumentAnalysisServiceTest {
         UUID id = UUID.randomUUID();
         Document doc = imageDoc(id, null);
 
-        when(documentRepository.loadWithResult(id)).thenReturn(doc);
+        when(documentRepository.load(id)).thenReturn(doc);
         when(storageService.readBytes(any())).thenReturn(new byte[]{1});
         when(llmService.analyzeImage(any(), eq("image/jpeg")))
                 .thenReturn("{\"documentType\":\"X\",\"summary\":\"y\",\"keyTopics\":[]}");
@@ -133,7 +133,7 @@ class DocumentAnalysisServiceTest {
         UUID id = UUID.randomUUID();
         Document doc = imageDoc(id, "image/png");
 
-        when(documentRepository.loadWithResult(id)).thenReturn(doc);
+        when(documentRepository.load(id)).thenReturn(doc);
         when(storageService.readBytes(any())).thenReturn(new byte[]{0});
         when(llmService.analyzeImage(any(), any()))
                 .thenThrow(new RuntimeException("Ollama unreachable"));
@@ -150,12 +150,15 @@ class DocumentAnalysisServiceTest {
         UUID id = UUID.randomUUID();
         Document doc = imageDoc(id, "image/png");
 
-        when(documentRepository.loadWithResult(id)).thenReturn(doc);
+        when(documentRepository.load(id)).thenReturn(doc);
         when(storageService.readBytes(any())).thenReturn(new byte[]{0});
         when(llmService.analyzeImage(any(), any())).thenReturn(
-                "Here's the analysis:\n```json\n" +
-                        "{\"documentType\":\"Letter\",\"summary\":\"S\",\"keyTopics\":[\"a\"]}\n" +
-                        "```\nLet me know if you need more.");
+                """
+                        Here's the analysis:
+                        ```json
+                        {"documentType":"Letter","summary":"S","keyTopics":["a"]}
+                        ```
+                        Let me know if you need more.""");
 
         service.analyze(id);
 
@@ -170,13 +173,15 @@ class DocumentAnalysisServiceTest {
         UUID id = UUID.randomUUID();
         Document doc = imageDoc(id, "image/png");
 
-        when(documentRepository.loadWithResult(id)).thenReturn(doc);
+        when(documentRepository.load(id)).thenReturn(doc);
         when(storageService.readBytes(any())).thenReturn(new byte[]{0});
         // First {...} is an example structure with no expected fields; the
         // real analysis follows.
         when(llmService.analyzeImage(any(), any())).thenReturn(
-                "Example: {\"foo\": \"bar\"}.\nResult:\n" +
-                        "{\"documentType\":\"Invoice\",\"summary\":\"Real\",\"keyTopics\":[\"x\"]}");
+                """
+                        Example: {"foo": "bar"}.
+                        Result:
+                        {"documentType":"Invoice","summary":"Real","keyTopics":["x"]}""");
 
         service.analyze(id);
 
@@ -192,7 +197,7 @@ class DocumentAnalysisServiceTest {
         UUID id = UUID.randomUUID();
         Document doc = imageDoc(id, "image/png");
 
-        when(documentRepository.loadWithResult(id)).thenReturn(doc);
+        when(documentRepository.load(id)).thenReturn(doc);
         when(storageService.readBytes(any())).thenReturn(new byte[]{0});
         when(llmService.analyzeImage(any(), any())).thenReturn(
                 "{\"documentType\":\"Letter\"," +
@@ -213,7 +218,7 @@ class DocumentAnalysisServiceTest {
         UUID id = UUID.randomUUID();
         Document doc = imageDoc(id, "image/png");
 
-        when(documentRepository.loadWithResult(id)).thenReturn(doc);
+        when(documentRepository.load(id)).thenReturn(doc);
         when(storageService.readBytes(any())).thenReturn(new byte[]{0});
         when(llmService.analyzeImage(any(), any())).thenReturn("Sorry, I cannot analyze this.");
 

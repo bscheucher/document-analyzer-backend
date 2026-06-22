@@ -146,7 +146,7 @@ allowed (see §12).
 
 ```text
 DocumentRepositoryPort        save, findById, findByIdAndOwner, findByIdAndOwnerWithResult,
-  (persistence, @Transactional) findAllByOwnerWithResults, loadWithResult, updateStatus,
+  (persistence, @Transactional) findAllByOwnerWithResults, load, updateStatus,
                               completeAnalysis, failAnalysis, deleteAndReturnPath
 UserRepositoryPort            findByEmail, save                       (persistence)
 StoragePort                   store(InputStream, filename), readBytes, delete   (integration/storage)

@@ -94,7 +94,7 @@ public class DocumentAnalysisService implements DocumentAnalysisUseCase {
 
     @Override
     public void analyze(UUID documentId) {
-        Document doc = documentRepository.loadWithResult(documentId);
+        Document doc = documentRepository.load(documentId);
         AnalysisResult result = new AnalysisResult();
 
         try {

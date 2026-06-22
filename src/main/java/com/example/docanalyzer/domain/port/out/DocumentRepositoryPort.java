@@ -31,7 +31,7 @@ public interface DocumentRepositoryPort {
     List<Document> findAllByOwnerWithResults(UUID ownerId);
 
     /** Unscoped load for the analysis pipeline; throws if the id is unknown. */
-    Document loadWithResult(UUID id);
+    Document load(UUID id);
 
     void updateStatus(UUID id, DocumentStatus status);
 

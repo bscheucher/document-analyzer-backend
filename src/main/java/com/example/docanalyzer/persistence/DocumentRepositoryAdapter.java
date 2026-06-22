@@ -73,7 +73,7 @@ public class DocumentRepositoryAdapter implements DocumentRepositoryPort {
 
     @Override
     @Transactional(readOnly = true)
-    public Document loadWithResult(UUID id) {
+    public Document load(UUID id) {
         // Unscoped lookup — only called from the async analysis pipeline,
         // which was already authorised by the controller that scheduled it.
         DocumentEntity entity = documents.findById(id)
