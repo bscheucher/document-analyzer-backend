@@ -43,12 +43,12 @@ app:
       # Above: split into chunk-size-chars windows with overlap-chars overlap,
       # summarise each part, then merge.
       threshold-chars: ${CHUNK_THRESHOLD_CHARS:20000}
-      chunk-size-chars: ${CHUNK_SIZE_CHARS:6000}
+      chunk-size-chars: ${CHUNK_SIZE_CHARS:3000}
       overlap-chars: ${CHUNK_OVERLAP_CHARS:200}
     ollama:
       base-url: ${OLLAMA_URL:http://localhost:11434}
       model: ${OLLAMA_MODEL:llava}       # vision model for images
-      text-model: ${OLLAMA_TEXT_MODEL:llama3}
+      text-model: ${OLLAMA_TEXT_MODEL:gemma3:1b}
     anthropic:
       base-url: ${ANTHROPIC_URL:https://api.anthropic.com}
       api-key: ${ANTHROPIC_API_KEY:}

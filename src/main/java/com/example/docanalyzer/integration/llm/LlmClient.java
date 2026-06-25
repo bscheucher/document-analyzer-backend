@@ -2,18 +2,20 @@ package com.example.docanalyzer.integration.llm;
 
 import com.example.docanalyzer.domain.port.out.LlmPort;
 import io.netty.channel.ChannelOption;
+import io.netty.handler.timeout.ReadTimeoutException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientRequestException;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.netty.http.client.HttpClient;
 
 import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 
 /**
  * {@link LlmPort} backed by Ollama (default) or the Anthropic API.
@@ -143,17 +145,15 @@ public class LlmClient implements LlmPort {
     @Override
     public String analyzeImage(byte[] imageBytes, String mimeType) {
         String base64 = Base64.getEncoder().encodeToString(imageBytes);
-        return switch (provider) {
-            case "anthropic" -> callAnthropicVision(base64, mimeType);
-            default -> callOllamaVision(base64);
-        };
+        return "anthropic".equals(provider)
+                ? callAnthropicVision(base64, mimeType)
+                : callOllamaVision(base64);
     }
 
     private String callTextProvider(String prompt) {
-        return switch (provider) {
-            case "anthropic" -> callAnthropic(prompt);
-            default -> callOllamaText(prompt);
-        };
+        return "anthropic".equals(provider)
+                ? callAnthropic(prompt)
+                : callOllamaText(prompt);
     }
 
     // ── Ollama ───────────────────────────────────────────────────────────────
@@ -161,40 +161,65 @@ public class LlmClient implements LlmPort {
     private String callOllamaText(String prompt) {
         log.debug("Calling Ollama text model: {}", ollamaTextModel);
 
-        Map<String, Object> body = Map.of(
+        return callOllama(ollamaTextModel, "OLLAMA_TEXT_MODEL", Map.of(
                 "model", ollamaTextModel,
                 "prompt", prompt,
                 "stream", false
-        );
-
-        var response = ollamaClient.post()
-                .uri("/api/generate")
-                .bodyValue(body)
-                .retrieve()
-                .bodyToMono(Map.class)
-                .block();
-
-        return response != null ? (String) response.get("response") : "";
+        ));
     }
 
     private String callOllamaVision(String base64Image) {
         log.debug("Calling Ollama vision model: {}", ollamaModel);
 
-        Map<String, Object> body = Map.of(
+        return callOllama(ollamaModel, "OLLAMA_MODEL", Map.of(
                 "model", ollamaModel,
                 "prompt", ANALYSIS_PROMPT,
                 "images", List.of(base64Image),
                 "stream", false
-        );
+        ));
+    }
 
-        var response = ollamaClient.post()
-                .uri("/api/generate")
-                .bodyValue(body)
-                .retrieve()
-                .bodyToMono(Map.class)
-                .block();
+    /**
+     * POSTs to Ollama's {@code /api/generate} and returns the {@code response}
+     * field. A 404 from Ollama means the requested model isn't pulled, and a
+     * read timeout means the model couldn't generate a response within
+     * {@code app.ai.response-timeout}; both are translated into actionable
+     * messages instead of a bare WebClient error.
+     */
+    private String callOllama(String model, String envVar, Map<String, Object> body) {
+        try {
+            var response = ollamaClient.post()
+                    .uri("/api/generate")
+                    .bodyValue(body)
+                    .retrieve()
+                    .bodyToMono(Map.class)
+                    .block();
 
-        return response != null ? (String) response.get("response") : "";
+            return response != null ? (String) response.get("response") : "";
+        } catch (WebClientResponseException.NotFound e) {
+            throw new IllegalStateException(
+                    "Ollama model '" + model + "' is not installed. Run `ollama pull " + model
+                            + "` or set " + envVar + " to an installed model.", e);
+        } catch (WebClientRequestException e) {
+            if (isReadTimeout(e)) {
+                throw new IllegalStateException(
+                        "Ollama model '" + model + "' did not respond within app.ai.response-timeout. "
+                                + "It is likely too slow on this hardware — switch to a smaller model "
+                                + "(set " + envVar + ", e.g. gemma3:1b), reduce CHUNK_SIZE_CHARS, or raise "
+                                + "AI_RESPONSE_TIMEOUT.", e);
+            }
+            throw e;
+        }
+    }
+
+    /** True if {@code t} or any of its causes is a Netty read timeout. */
+    private static boolean isReadTimeout(Throwable t) {
+        for (Throwable cause = t; cause != null; cause = cause.getCause()) {
+            if (cause instanceof ReadTimeoutException) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // ── Anthropic ────────────────────────────────────────────────────────────
@@ -271,7 +296,6 @@ public class LlmClient implements LlmPort {
                 .map(block -> block.get("text"))
                 .filter(String.class::isInstance)
                 .map(String.class::cast)
-                .filter(Objects::nonNull)
                 .findFirst()
                 .orElse("");
     }
